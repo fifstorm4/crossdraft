@@ -24,7 +24,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 from digbuild import Circuit                                    # noqa: E402
 from dig2claasp import (Netlist, RoundSpec, iterate,             # noqa: E402
-                        find_rotations, cross_check)
+                        find_rotations, cross_check, classpath)
 
 SP = Circuit.split_pin
 M64 = (1 << 64) - 1
@@ -62,7 +62,7 @@ class Ctx:
     def netlist(self, dig):
         j = dig.replace(".dig", ".json")
         r = subprocess.run(
-            ["java", "-cp", f"{self.jar}:{self.bridge}",
+            ["java", "-cp", classpath(self.jar, self.bridge),
              "digbridge.DigNetlist", dig, j],
             capture_output=True, text=True)
         if r.returncode:

@@ -14,6 +14,7 @@ unrealisable.
 import subprocess, random, sys
 from digbuild import Circuit
 from dig2claasp import Netlist, find_rotations, cross_check
+from javacp import classpath                    # noqa: E402
 
 JAR = "../Digital/Digital.jar"; BR = "../digbridge.jar"; SP = Circuit.split_pin
 S1 = [0x4,0x7,0x5,0x1,0xC,0xB,0xD,0x8,0xE,0xF,0x6,0x3,0xA,0x9,0x2,0x0]
@@ -92,7 +93,7 @@ if __name__ == "__main__":
     rc = RC0 << 32
     build("llbc_round.dig", rc)
     j = "llbc_round.json"
-    r = subprocess.run(["java","-cp",f"{JAR}:{BR}","digbridge.DigNetlist","llbc_round.dig",j],
+    r = subprocess.run(["java","-cp",classpath(JAR,BR),"digbridge.DigNetlist","llbc_round.dig",j],
                        capture_output=True, text=True)
     if r.returncode: print(r.stderr); sys.exit(1)
     nl = Netlist(j)

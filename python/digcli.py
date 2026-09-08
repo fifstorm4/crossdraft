@@ -52,6 +52,7 @@ import os
 import random
 import subprocess
 import sys
+from dig2claasp import classpath
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -94,7 +95,7 @@ def _outdir(spec, args):
 
 def _extract(dig, jar, bridge):
     js = dig.replace(".dig", ".json")
-    r = subprocess.run(["java", "-cp", f"{jar}:{bridge}",
+    r = subprocess.run(["java", "-cp", classpath(jar, bridge),
                         "digbridge.DigNetlist", dig, js],
                        capture_output=True, text=True)
     if r.returncode:
@@ -174,7 +175,7 @@ def _embed_tests(builder, spec, part, count, jar, bridge):
     import subprocess
     import tempfile
 
-    from dig2claasp import Netlist, evaluate
+    from dig2claasp import Netlist, evaluate, classpath
 
     ins = [c for c in builder.c.components if c.type == "In"]
     outs = [c for c in builder.c.components if c.type == "Out"]
@@ -193,7 +194,7 @@ def _embed_tests(builder, spec, part, count, jar, bridge):
         stage = os.path.join(tmp, "stage.dig")
         builder.write(stage, jar, bridge)
         js = os.path.join(tmp, "stage.json")
-        r = subprocess.run(["java", "-cp", f"{jar}:{bridge}",
+        r = subprocess.run(["java", "-cp", classpath(jar, bridge),
                             "digbridge.DigNetlist", stage, js],
                            capture_output=True, text=True)
         if r.returncode:

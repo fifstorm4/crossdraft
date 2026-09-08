@@ -16,6 +16,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "python"))
+from javacp import classpath                    # noqa: E402
 
 S = [0x4, 0x7, 0x5, 0x1, 0xC, 0xB, 0xD, 0x8,
      0xE, 0xF, 0x6, 0x3, 0xA, 0x9, 0x2, 0x0]
@@ -67,7 +68,7 @@ def main():
         c.write(parent, jar, bridge)
 
         js = os.path.join(tmp, "parent.json")
-        subprocess.run(["java", "-cp", f"{jar}:{bridge}",
+        subprocess.run(["java", "-cp", classpath(jar, bridge),
                         "digbridge.DigNetlist", parent, js],
                        check=True, capture_output=True)
         nl = Netlist(js, digital_jar=jar, bridge_jar=bridge)

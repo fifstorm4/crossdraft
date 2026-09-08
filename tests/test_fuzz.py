@@ -44,6 +44,7 @@ import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "python"))
+from javacp import classpath                    # noqa: E402
 
 
 def rand_sbox(rng, bits):
@@ -226,7 +227,7 @@ def run_wide_case(bits, steps, jar, bridge, tmp, index):
     b.write(dig, jar, bridge)
 
     js = dig.replace(".dig", ".json")
-    r = subprocess.run(["java", "-cp", f"{jar}:{bridge}",
+    r = subprocess.run(["java", "-cp", classpath(jar, bridge),
                         "digbridge.DigNetlist", dig, js],
                        capture_output=True, text=True)
     if r.returncode:
@@ -344,7 +345,7 @@ def run_case(recipe, jar, bridge, tmp, index, vectors=6):
     b.write(dig, jar, bridge)
 
     js = dig.replace(".dig", ".json")
-    r = subprocess.run(["java", "-cp", f"{jar}:{bridge}",
+    r = subprocess.run(["java", "-cp", classpath(jar, bridge),
                         "digbridge.DigNetlist", dig, js],
                        capture_output=True, text=True)
     if r.returncode:

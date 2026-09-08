@@ -40,8 +40,11 @@ import json
 import os
 import re
 import subprocess
+
 import tempfile
 from xml.sax.saxutils import escape
+
+from javacp import classpath
 
 
 class Component:
@@ -245,7 +248,7 @@ class Circuit:
             with open(stage, "w") as fh:
                 fh.write(xml_text)
             res = subprocess.run(
-                [java, "-cp", f"{digital_jar}:{bridge_jar}",
+                [java, "-cp", classpath(digital_jar, bridge_jar),
                  "digbridge.DigNetlist", "--pins", stage],
                 capture_output=True, text=True)
             try:

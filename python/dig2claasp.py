@@ -62,6 +62,9 @@ import os
 import re
 from collections import defaultdict, deque
 
+# Re-exported so callers that already import from here keep working.
+from javacp import classpath          # noqa: F401
+
 
 SUPPORTED = {
     "In", "Out", "XOr", "And", "Or", "Not", "NAnd", "NOr",
@@ -78,6 +81,7 @@ PASSIVE = {"Tunnel", "Testcase", "Text", "Rectangle"}
 
 
 # --------------------------------------------------------------------------
+
 
 def _pin_key(item):
     """
@@ -231,7 +235,7 @@ def _extract_netlist(dig_path, digital_jar, bridge_jar, java="java"):
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "n.json")
         r = subprocess.run(
-            [java, "-cp", f"{digital_jar}:{bridge_jar}",
+            [java, "-cp", classpath(digital_jar, bridge_jar),
              "digbridge.DigNetlist", dig_path, out],
             capture_output=True, text=True)
         if r.returncode:

@@ -12,6 +12,7 @@ The round count is an argument to iterate(), not something drawn.
 import subprocess, random, sys
 from digbuild import Circuit
 from dig2claasp import Netlist, RoundSpec, iterate, find_rotations, cross_check
+from javacp import classpath                    # noqa: E402
 
 JAR="../Digital/Digital.jar"; BR="../digbridge.jar"; SP=Circuit.split_pin
 S1=[0x4,0x7,0x5,0x1,0xC,0xB,0xD,0x8,0xE,0xF,0x6,0x3,0xA,0x9,0x2,0x0]
@@ -131,7 +132,7 @@ def build_keystep(path):
 
 def netlist(dig):
     j=dig.replace('.dig','.json')
-    r=subprocess.run(["java","-cp",f"{JAR}:{BR}","digbridge.DigNetlist",dig,j],
+    r=subprocess.run(["java","-cp",classpath(JAR,BR),"digbridge.DigNetlist",dig,j],
                      capture_output=True,text=True)
     if r.returncode: print(r.stderr); sys.exit(1)
     return Netlist(j), j

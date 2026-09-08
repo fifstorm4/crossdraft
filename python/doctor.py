@@ -70,7 +70,11 @@ def _bridge():
         return (False, f"{jar or 'BRIDGE_JAR'} not found",
                 "cd java && make DIGITAL_JAR=/path/to/Digital.jar")
     dj = os.environ.get("DIGITAL_JAR", "")
-    rc, out = _run(["java", "-cp", f"{dj}:{jar}", "digbridge.DigNetlist"])
+    # os.pathsep, not ':' -- Windows separates classpath entries with ';'
+    # and reads a colon-joined string as one path, failing with a
+    # ClassNotFoundException for a class that is plainly there.
+    rc, out = _run(["java", "-cp", os.pathsep.join([dj, jar]),
+                    "digbridge.DigNetlist"])
     ok = "usage:" in out or "DigNetlist" in out
     return ok, jar if ok else out.strip()[:120], \
         "" if ok else "rebuild it against this Digital.jar"
