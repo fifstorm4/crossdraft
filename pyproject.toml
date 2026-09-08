@@ -1,0 +1,41 @@
+[project]
+name = "crossdraft"
+version = "0.1.0"
+description = "Draw a cipher once in Digital; check it against its test vectors and analyse it with CLAASP."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+keywords = ["cryptanalysis", "block-cipher", "differential-cryptanalysis",
+            "sat", "reproducible-research"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Topic :: Security :: Cryptography",
+  "Programming Language :: Python :: 3",
+]
+
+# The core -- drawing a cipher and checking it against its test vectors --
+# needs nothing but the standard library and a JVM to run Digital.jar. The
+# heavy stack is only for analysis, which is why it is an extra rather than a
+# requirement: a user's first hour is spent drawing and verifying, and that
+# hour should not begin with a SageMath install.
+dependencies = []
+
+[project.optional-dependencies]
+analysis = ["claasp"]          # also needs SageMath, kissat, espresso
+figures = ["matplotlib"]       # only for .pdf/.png/.jpg export
+
+[project.urls]
+Homepage = "https://github.com/fifstorm/crossdraft"
+Issues = "https://github.com/fifstorm/crossdraft/issues"
+
+[project.scripts]
+cdraft = "crossdraft.cli:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"crossdraft" = "python"}

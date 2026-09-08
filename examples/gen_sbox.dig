@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<circuit>
+  <version>1</version>
+  <visualElements>
+    <visualElement>
+      <elementName>In</elementName>
+      <elementAttributes>
+        <entry><string>Label</string><string>x</string></entry>
+        <entry><string>Bits</string><int>4</int></entry>
+      </elementAttributes>
+      <pos x="100" y="200"/>
+    </visualElement>
+    <visualElement>
+      <elementName>Const</elementName>
+      <elementAttributes>
+        <entry><string>Value</string><long>1</long></entry>
+        <entry><string>Bits</string><int>1</int></entry>
+      </elementAttributes>
+      <pos x="100" y="300"/>
+    </visualElement>
+    <visualElement>
+      <elementName>ROM</elementName>
+      <elementAttributes>
+        <entry><string>Label</string><string>S</string></entry>
+        <entry><string>Bits</string><int>4</int></entry>
+        <entry><string>AddrBits</string><int>4</int></entry>
+        <entry><string>Data</string><data>c,5,6,b,9,0,a,d,3,e,f,8,4,7,1,2</data></entry>
+      </elementAttributes>
+      <pos x="300" y="200"/>
+    </visualElement>
+    <visualElement>
+      <elementName>Out</elementName>
+      <elementAttributes>
+        <entry><string>Label</string><string>y</string></entry>
+        <entry><string>Bits</string><int>4</int></entry>
+      </elementAttributes>
+      <pos x="500" y="200"/>
+    </visualElement>
+    <visualElement>
+      <elementName>Testcase</elementName>
+      <elementAttributes>
+        <entry><string>Label</string><string>t</string></entry>
+        <entry><string>Testdata</string><testData><dataString>x y
+0x0 0xC
+0x1 0x5
+0x2 0x6
+0x3 0xB
+0x4 0x9
+0x5 0x0
+0x6 0xA
+0x7 0xD
+0x8 0x3
+0x9 0xE
+0xA 0xF
+0xB 0x8
+0xC 0x4
+0xD 0x7
+0xE 0x1
+0xF 0x2</dataString></testData></entry>
+      </elementAttributes>
+      <pos x="100" y="80"/>
+    </visualElement>
+  </visualElements>
+  <wires>
+    <wire><p1 x="100" y="200"/><p2 x="300" y="200"/></wire>
+    <wire><p1 x="100" y="300"/><p2 x="300" y="300"/></wire>
+    <wire><p1 x="300" y="300"/><p2 x="300" y="240"/></wire>
+    <wire><p1 x="360" y="220"/><p2 x="500" y="220"/></wire>
+    <wire><p1 x="500" y="220"/><p2 x="500" y="200"/></wire>
+  </wires>
+</circuit>
