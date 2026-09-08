@@ -262,6 +262,24 @@ def nist(cipher, test_type="avalanche", bits_per_sequence=131072,
             "/usr/local/bin/sts-2.1.2/assess; run setup_nist.py to build it.")
 
     round_end = cipher.number_of_rounds - 1 if round_end is None else round_end
+
+    # CLAASP copies /usr/local/bin/sts-2.1.2 into `nist_sts_temp_dir` beside
+    # the working directory and runs `assess` from there, so the working
+    # directory has to be writable and has to have room. On a bind mount that
+    # is not a given, and the failure is silent: `assess` writes nothing, the
+    # report cannot be parsed, and the call returns an empty result that
+    # looks like a clean run. Check first and say so.
+    probe = os.path.join(os.getcwd(), ".nist_write_probe")
+    try:
+        with open(probe, "w") as fh:
+            fh.write("x")
+        os.remove(probe)
+    except OSError as e:
+        raise RuntimeError(
+            f"the working directory {os.getcwd()} is not writable ({e}). "
+            f"CLAASP copies the NIST suite there before running it; run "
+            f"from a writable directory.") from e
+
     t0 = time.time()
     raw = NISTStatisticalTests(cipher).nist_statistical_tests(
         test_type, bits_in_one_sequence=bits_per_sequence,
@@ -306,11 +324,23 @@ def nist(cipher, test_type="avalanche", bits_per_sequence=131072,
             # assess produced nothing parseable, usually because its
             # per-test output folders are missing, and the caveat below
             # would then look like the whole story.
-            print("  no results came back from the test suite. `assess` ran "
-                  "but its report could not be parsed --")
-            print("  most often the per-test folders under "
-                  "experiments/AlgorithmTesting are missing.")
-            print("  python3 setup_nist.py recreates them.")
+            print("  no results came back from the test suite.")
+            print(f"  CLAASP copies /usr/local/bin/sts-2.1.2 into "
+                  f"{os.path.join(os.getcwd(), 'nist_sts_temp_dir')} and "
+                  f"runs assess there;")
+            tmp = os.path.join(os.getcwd(), "nist_sts_temp_dir")
+            if not os.path.isdir(tmp):
+                print("  that copy did not happen -- check that "
+                      "/usr/local/bin/sts-2.1.2 exists (setup_nist.py).")
+            elif not os.path.exists(os.path.join(tmp, "assess")):
+                print("  the copy exists but has no assess binary in it.")
+            else:
+                print("  assess is there, so it ran and produced nothing "
+                      "parseable. Its exit status is")
+                print("  checked against a hard-coded value inside CLAASP, "
+                      "which a different shell can")
+                print("  fail to produce; the report directory under "
+                      "test_reports/ shows what was written.")
         print(f"  {bits_per_sequence:,} bits x {sequences} sequences, "
               f"{elapsed:.0f}s")
         print(f"  {out['caveat']}")

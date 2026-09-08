@@ -166,6 +166,24 @@ jobs:
             'python3 /opt/crossdraft/tests/test_pipeline.py \
                --digital-jar "$DIGITAL_JAR" --bridge-jar "$BRIDGE_JAR"' 
 
+      # If the NIST battery came back empty, say why. CLAASP copies the
+      # suite into the working directory and runs it there, so a bind mount
+      # or a restricted shell can defeat it without any error surfacing.
+      - name: NIST diagnostics
+        if: always()
+        run: |
+          docker run --rm -v "$PWD:/work" \
+            --entrypoint sh crossdraft:ci -c '
+              echo "--- installed suite ---"
+              ls -la /usr/local/bin/sts-2.1.2/assess
+              ls /usr/local/bin/sts-2.1.2/experiments/AlgorithmTesting | head -3
+              echo "--- can the working directory take the copy? ---"
+              cd /work && touch .probe && rm .probe && echo "writable"
+              cp -r /usr/local/bin/sts-2.1.2 ./probe_sts && echo "copied"
+              ./probe_sts/assess --help 2>&1 | head -3 || true
+              rm -rf ./probe_sts
+            ' || true
+
       - name: Environment record
         if: always()
         run: |
