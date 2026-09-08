@@ -329,24 +329,12 @@ def cmd_analyse(args):
     out = _outdir(spec, args)
     rounds = args.rounds or 3
 
-    rj = os.path.join(out, f"{spec['name']}_round.json")
-    kj = os.path.join(out, f"{spec['name']}_keystep.json")
-    if not os.path.exists(rj):
-        sys.exit(f"{rj} missing; run `build` first")
-
-    key = 0
-    kw = dict(rounds=rounds,
-              params=lambda i: spec["params"](i, key),
-              block_bits=spec["block_bits"],
-              key_bits=spec["key_bits"],
-              family_name=spec["name"])
-    if "keystep" in spec["parts"] and os.path.exists(kj):
-        kw.update(key_json=kj,
-                  key_params=lambda i: spec.get(
-                      "key_params", lambda i, k: {})(i, key),
-                  key_map=spec["key_map"])
-
-    cipher = build_cipher(rj, **kw)
+    # Via the shared loader, not by assembling the arguments here. A key
+    # schedule is wired up by several optional settings -- key_map,
+    # key_extra, final_key -- and a second copy of that assembly is a second
+    # chance to name one the cipher does not have. PRESENT uses key_extra
+    # and no key_map, and this is exactly where that crashed.
+    cipher = _load_cipher(spec, out, rounds)
     print(f"  CLAASP cipher: {rounds} rounds, "
           f"{len(cipher.get_all_components_ids())} components")
 
@@ -748,6 +736,8 @@ SUITES = [
      "normal", []),
     ("randomised circuits", "test_fuzz.py", "normal",
      ["--cases", "30", "--stop-after", "2"]),
+    ("the GUI serves and its stages run", "test_gui.py", "normal",
+     ["--rounds", "2"]),
     ("optional features", "test_features.py", "full", []),
     ("cost, benchmarks, attacks", "test_analysis.py", "full", []),
     ("related key, diffusion, NIST", "test_statistical.py", "full",
