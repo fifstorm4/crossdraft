@@ -529,7 +529,112 @@ GIFT = {
 }
 
 
-REGISTRY = {c["name"]: c for c in (PRESENT, LLBC, SPECK, GIFT)}
+# ==========================================================================
+# SIMON 32/64
+#
+#   R. Beaulieu, D. Shors, J. Smith, S. Treatman-Clark, B. Weeks, L. Wingers,
+#   "The SIMON and SPECK Families of Lightweight Block Ciphers",
+#   IACR ePrint 2013/404.
+#
+# Speck's sibling, and here for the operation Speck does not have. Simon's
+# non-linearity is a bitwise AND rather than an addition:
+#
+#   x, y  ->  y xor ((x <<< 1) & (x <<< 8)) xor (x <<< 2) xor k,  x
+#
+# That makes it AND-RX rather than ARX, and it is the third kind of
+# non-linear layer this toolchain has to model -- after the S-box lookup of
+# PRESENT and GIFT, and the modular addition of Speck. All three now have a
+# worked example, which is the point: a new design is usually a rearrangement
+# of parts that already exist here.
+# ==========================================================================
+
+SIMON_WORD = 16
+SIMON_ROUNDS = 32
+
+# The five z sequences are 62-bit constants; Simon32/64 uses z0. Bits are
+# taken from the top, so round i wants bit 61 - (i mod 62).
+SIMON_Z = [4506230155203752166,
+           2575579794259089498,
+           3160415496042964403,
+           3957284701066611983,
+           3781244162168104175]
+SIMON_Z0 = SIMON_Z[0]
+
+
+def _srot(x, n, w=SIMON_WORD):
+    n %= w
+    return ((x << n) | (x >> (w - n))) & ((1 << w) - 1) if n else x
+
+
+def simon_round(b):
+    """
+    One Simon round.
+
+        x' = y xor ((x <<< 1) AND (x <<< 8)) xor (x <<< 2) xor rk
+        y' = x
+
+    Three rotations, one AND, three XORs. `gate("And", ...)` is the only
+    piece here that no other example uses.
+    """
+    x = b.inp("x", SIMON_WORD)
+    y = b.inp("y", SIMON_WORD)
+    k = b.inp("rk", SIMON_WORD)
+
+    f = b.xor(b.gate("And", b.rotl(x, 1), b.rotl(x, 8)), b.rotl(x, 2))
+    b.out("x'", b.xor(y, f, k))
+    b.out("y'", x)
+
+
+def _simon_round_keys(key, rounds=SIMON_ROUNDS):
+    """
+    Simon32/64's key schedule, m = 4 words.
+
+        k[i+4] = c xor z[i] xor k[i] xor (I xor S^-1)(S^-3 k[i+3] xor k[i+1])
+
+    with c = 2^n - 4. Two details are easy to get backwards and both give a
+    cipher that still looks like a cipher: the key words come out of the
+    master key most significant first, so k[0] is the *high* word; and the z
+    bit for round i is bit 61 - (i mod 62), counted from the top of the
+    62-bit constant rather than the bottom.
+    """
+    m = (1 << SIMON_WORD) - 1
+    c = m ^ 3                      # 2^n - 4
+    words = 4
+    k = [(key >> (SIMON_WORD * i)) & m for i in range(words)]
+    for i in range(rounds - words):
+        op = _srot(k[i + words - 1], -3 % SIMON_WORD)
+        op ^= k[i + 1]
+        op ^= _srot(op, -1 % SIMON_WORD)
+        z = (SIMON_Z0 >> (61 - (i % 62))) & 1
+        k.append(c ^ z ^ k[i] ^ op)
+    return k[:rounds]
+
+
+def simon_reference(plaintext, key, rounds=SIMON_ROUNDS):
+    m = (1 << SIMON_WORD) - 1
+    x, y = (plaintext >> SIMON_WORD) & m, plaintext & m
+    for k in _simon_round_keys(key, rounds):
+        x, y = y ^ (_srot(x, 1) & _srot(x, 8)) ^ _srot(x, 2) ^ k, x
+    return (x << SIMON_WORD) | y
+
+
+SIMON = {
+    "name": "simon",
+    "parts": {"round": simon_round},
+    "reference": simon_reference,
+    "state": ["x", "y"],
+    "block_bits": 32,
+    "key_bits": 64,
+    "rounds": SIMON_ROUNDS,
+    "bit_order": "lsb",
+    "vectors": [(0x65656877, 0x1918111009080100, 0xC69BE9BB)],
+    "params": lambda i, key: {"rk": _simon_round_keys(key)[i]},
+    "note": "AND-RX. The non-linearity is a bitwise AND, so unlike Speck "
+            "there is no carry and unlike PRESENT there is no lookup table.",
+}
+
+
+REGISTRY = {c["name"]: c for c in (PRESENT, LLBC, SPECK, GIFT, SIMON)}
 
 
 def claasp_kwargs(spec, rounds, outdir, key=0):

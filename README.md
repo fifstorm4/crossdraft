@@ -50,14 +50,17 @@ this project exists to catch, and F8 catches it on the drawing in front of
 you. Whether the circuit computes the *cipher* is a separate question, and
 the one `verify` answers.
 
-Signals are carried by named `Tunnel`s rather than drawn wires. That is a
-trade: the schematic shows components and their labels but not the lines
-between them, so it reads as a netlist rather than a picture. Wires are
-possible — Digital joins two of them only where an endpoint is shared, so
-crossings are free — but routing them without accidentally sharing a corner
-is work that buys nothing functionally, and the tunnel names carry the same
-information. If the picture matters more than the effort, that is the
-direction.
+Signals are drawn as wires. Digital joins two of them only where an **end
+point** is shared: crossings stay independent, so do overlapping collinear
+runs, and so does an endpoint landing partway along another wire. That
+narrow rule is what makes routing tractable — paths may cross freely, and the
+only things to avoid are two nets sharing a corner and a corner landing on a
+pin. Each net gets a vertical channel of its own, chosen from an x nobody
+else occupies.
+
+`Circuit.write(..., wires=False)` falls back on named tunnels, which cannot
+short against anything. It is there as somewhere to retreat to if a drawn
+circuit ever comes out wrong.
 
 ---
 
@@ -332,7 +335,7 @@ at all, and the differential behaviour of an adder — which depends on the
 values and not only on the difference — is the thing S-box ciphers never
 exercise.
 
-Copy any of the four worked examples and replace the round function.
+Copy any of the five worked examples and replace the round function.
 
 | example | shape | what it exercises |
 |---|---|---|
@@ -340,6 +343,7 @@ Copy any of the four worked examples and replace the round function.
 | LLBC-128-128 | Feistel | rotations, two S-box banks, a drawn key schedule |
 | Speck32/64 | ARX | `modadd`, where the differential depends on values not just differences |
 | GIFT-64-128 | SPN | a round key that reaches only two bits per nibble |
+| Simon32/64 | AND-RX | a bitwise AND as the non-linearity — no table, no carry |
 
 GIFT is worth a note. Its S-box has DDT entries that are not powers of two,
 so a transition can have probability 6/16 — and a SAT model, which spends one
@@ -551,6 +555,8 @@ the search still finishes in seconds.
 | PRESENT | published vectors, key schedule drawn | 4/4 |
 | Speck32/64 | published vector (ePrint 2013/404) | 1/1 |
 | GIFT-64-128 | published vectors (CHES 2017) | 2/2 |
+| Simon32/64 | published vector (ePrint 2013/404) | 1/1 |
+| Simon32/64 | trails vs CLAASP's own Simon, 2–6 rounds | weights 2, 4, 6, 8, 12 — identical |
 | Speck32/64 | trails vs CLAASP's own Speck, 2–5 rounds | weights 1, 3, 5, 9 — identical |
 | PRESENT | circuit vs reference, 1/2/5/31 rounds | all agree |
 | PRESENT | key avalanche, 31 rounds | 32.70 of 64 bits, ideal 32 |

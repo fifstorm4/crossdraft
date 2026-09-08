@@ -259,23 +259,26 @@ class Circuit:
                 if base and os.path.exists(stage):
                     os.remove(stage)
 
-    def write(self, path, digital_jar, bridge_jar, java="java"):
+    def write(self, path, digital_jar, bridge_jar, java="java",
+              wires=True):
         """
         Emit the circuit, resolving pin coordinates through Digital itself.
 
-        Connections are made with Tunnels rather than long wires.  Digital
-        joins any two wires that touch, so routing a busy circuit with drawn
-        wires silently merges nets that only happen to cross -- a 16-way fan
-        out to sixteen S-boxes will short itself against the splitter's output
-        wires and the error surfaces far downstream as "net driven twice".
-        A Tunnel connects by name, so every link becomes two short stubs that
-        cannot collide with anything.
+        Connections are drawn as wires by default, because the point of
+        producing a .dig is that somebody can open it and read it. Pass
+        wires=False to fall back on named tunnels, which is smaller on the
+        canvas but shows no lines at all.
 
-        Three passes, because each one needs the geometry the previous one
-        produced:
-          1. components alone            -> where are the component pins?
-          2. components + tunnels        -> where are the tunnel pins?
-          3. components + tunnels + wires
+        Digital joins two wires only where an END POINT is shared. Crossings
+        stay independent, so do overlapping collinear runs, and so does an
+        endpoint landing partway along another wire. That is a far narrower
+        rule than it looks, and it is what makes routing tractable: paths may
+        cross each other freely, and the only thing to avoid is two different
+        nets sharing a corner or a corner landing on a pin.
+
+        Two passes, because the second needs what the first produced: emit
+        the components alone and ask Digital where the pins landed, then emit
+        the same components plus the wires between them.
         """
         pins = self._query_pins(self._xml(), digital_jar, bridge_jar, java,
                                 near=path)
@@ -290,10 +293,41 @@ class Circuit:
                         f"no pin {pin!r} on {comp.type} ({comp.id}); "
                         f"available: {avail}")
 
-        # Group links into nets first.  A signal that fans out -- one
-        # constant feeding sixteen S-box select pins -- is a single net with
-        # seventeen pins, not sixteen separate links, and giving each link its
-        # own tunnel would stack sixteen tunnels on the same coordinate.
+        # Overlapping components put two pins on one point, which the
+        # shared-endpoint rule then reads as one net. Builder's layout cannot
+        # produce that; a hand-assembled circuit can, and the error would
+        # otherwise surface far away as "net driven twice".
+        placed = {}
+        for c in self.components:
+            if c.type in ("Text", "Rectangle", "Testcase"):
+                continue
+            if (c.x, c.y) in placed:
+                other = placed[(c.x, c.y)]
+                raise ValueError(
+                    f"{c.type} ({c.id}) and {other.type} ({other.id}) are "
+                    f"both at {(c.x, c.y)}. Overlapping components short "
+                    f"their nets together; move one.")
+            placed[(c.x, c.y)] = c
+
+        nets = self._nets()
+
+        if wires:
+            segments = self._route_nets(nets, index, direction, pins)
+            with open(path, "w") as fh:
+                fh.write(self._xml(segments))
+            return path
+
+        return self._write_with_tunnels(path, nets, index, direction,
+                                        digital_jar, bridge_jar, java)
+
+    def _nets(self):
+        """
+        Group links into nets.
+
+        A signal that fans out -- one constant feeding sixteen S-box select
+        pins -- is a single net with seventeen pins, not sixteen links, and
+        every branch has to leave from the same driver.
+        """
         parent = {}
 
         def find(k):
@@ -303,34 +337,99 @@ class Circuit:
                 k = parent[k]
             return k
 
-        def union(a, b):
-            ra, rb = find(a), find(b)
+        for (ca, pa), (cb, pb) in self.links:
+            ra, rb = find((ca.id, pa)), find((cb.id, pb))
             if ra != rb:
                 parent[ra] = rb
 
-        for (ca, pa), (cb, pb) in self.links:
-            union((ca.id, pa), (cb.id, pb))
+        nets = {}
+        for endpoint in sorted(parent):
+            nets.setdefault(find(endpoint), []).append(endpoint)
+        return list(nets.values())
 
-        net_name = {}
-        for endpoint in parent:
-            root = find(endpoint)
-            if root not in net_name:
-                net_name[root] = f"n{len(net_name)}"
+    def _route_nets(self, nets, index, direction, pins):
+        """
+        Draw every net as Manhattan paths over a channel of its own.
 
+        Each net gets one vertical x that no pin sits on and no other net
+        uses. A branch then runs horizontally from the driver to that
+        channel, vertically along it, and horizontally into the sink. The two
+        corners are the only endpoints a branch introduces, and since the
+        channel is unique to the net, no two nets can share one.
+
+        Branches of the same net do share their corners, which is correct --
+        they are the same signal.
+        """
+        pin_xs = {p["x"] for p in pins}
+        used = set()
+        segments = []
+
+        def channel(lo, hi):
+            """A free vertical line, preferably between the two pins."""
+            mid = self._snap((lo + hi) // 2)
+            for step in range(0, 400, self.grid):
+                for cand in ((mid + step), (mid - step)):
+                    if cand not in pin_xs and cand not in used:
+                        used.add(cand)
+                        return cand
+            cand = max(pin_xs) + self.grid
+            while cand in used:
+                cand += self.grid
+            used.add(cand)
+            return cand
+
+        for endpoints in nets:
+            drivers = [e for e in endpoints
+                       if direction.get(e) == "output"] or endpoints[:1]
+            src = index[drivers[0]]
+            sinks = [index[e] for e in endpoints if e != drivers[0]]
+            if not sinks:
+                continue
+
+            lo = min([src[0]] + [s[0] for s in sinks])
+            hi = max([src[0]] + [s[0] for s in sinks])
+            cx = channel(lo, hi)
+
+            for dst in sinks:
+                if src[1] == dst[1] and src[0] == dst[0]:
+                    continue
+                if src[0] == dst[0] or src[1] == dst[1]:
+                    segments.append((src, dst))
+                    continue
+                a, b = (cx, src[1]), (cx, dst[1])
+                segments.append((src, a))
+                segments.append((a, b))
+                segments.append((b, dst))
+        return segments
+
+    def _write_with_tunnels(self, path, nets, index, direction,
+                            digital_jar, bridge_jar, java):
+        """
+        The older scheme: connect by name instead of by line.
+
+        Kept because it is immune to routing mistakes -- a tunnel cannot
+        short against anything -- so it is somewhere to fall back to if a
+        drawn circuit ever comes out wrong.
+        """
+        names = {}
         n_components = len(self.components)
         stubs = []
-        for endpoint in sorted(parent):
-            cid, pin = endpoint
-            px, py = index[endpoint]
-            # Put the tunnel on the side the signal comes from: an input pin
-            # gets one to its left, an output pin one to its right.  A
-            # splitter carries its input and its first output only one grid
-            # step apart, so a fixed offset lands the tunnel exactly on the
-            # neighbouring pin and shorts the two nets together.
-            dx = self.grid if direction[endpoint] == "output" else -self.grid
-            t = self.add("Tunnel", x=px + dx, y=py,
-                         NetName=net_name[find(endpoint)])
-            stubs.append(((px, py), t))
+        for i, endpoints in enumerate(nets):
+            for endpoint in endpoints:
+                px, py = index[endpoint]
+                dx = self.grid if direction[endpoint] == "output" \
+                    else -self.grid
+                t = self.add("Tunnel", x=px + dx, y=py, NetName=f"n{i}")
+                stubs.append(((px, py), t))
+                names[endpoint] = f"n{i}"
+
+        seen = {}
+        for _, t in stubs:
+            if (t.x, t.y) in seen:
+                raise ValueError(
+                    f"two tunnels would sit at {(t.x, t.y)}; move the "
+                    f"components further apart (grid={self.grid})")
+            seen[(t.x, t.y)] = t
 
         pins2 = self._query_pins(self._xml(), digital_jar, bridge_jar, java,
                                  near=path)
@@ -347,5 +446,72 @@ class Circuit:
         with open(path, "w") as fh:
             fh.write(self._xml(wires))
 
-        del self.components[n_components:]    # keep the object reusable
+        del self.components[n_components:]
         return path
+
+    @staticmethod
+    def _signed64(value, bits):
+        """
+        Digital stores a constant as a Java long, which is signed.
+
+        A 64-bit value with its top bit set is larger than Long.MAX_VALUE, and
+        XStream refuses the file outright -- the circuit does not load at all,
+        with a NumberFormatException naming a number the user never typed.
+        Writing the two's-complement form gives Digital the same 64 bits.
+        """
+        if bits >= 64 and value >= (1 << 63):
+            return value - (1 << 64)
+        return value
+
+    @staticmethod
+    def _attr_xml(key, value):
+        if key == "Data":
+            # A ROM table.  Digital stores it as <data> with comma-separated
+            # values; the reader accepts decimal or hex digits.
+            body = ",".join(f"{v:x}" for v in value)
+            return (f"        <entry><string>Data</string>"
+                    f"<data>{body}</data></entry>")
+        if key == "Testdata":
+            return ("        <entry><string>Testdata</string><testData>"
+                    f"<dataString>{escape(str(value))}</dataString>"
+                    "</testData></entry>")
+        if key == "Value":
+            return (f"        <entry><string>Value</string>"
+                    f"<long>{value}</long></entry>")
+        kind = _XML_TYPE.get(key, "string")
+        if kind == "rotation":
+            return (f"        <entry><string>{key}</string>"
+                    f'<rotation rotation="{value}"/></entry>')
+        if kind == "intFormat":
+            return (f"        <entry><string>{key}</string>"
+                    f"<intFormat>{value}</intFormat></entry>")
+        return (f"        <entry><string>{escape(key)}</string>"
+                f"<{kind}>{escape(str(value))}</{kind}></entry>")
+
+    def _query_pins(self, xml_text, digital_jar, bridge_jar, java,
+                    near=None):
+        """
+        Ask Digital where the pins ended up.
+
+        The staging file is written beside the real output, not in a temp
+        directory, because Digital resolves a sub-circuit component by looking
+        for its .dig next to the circuit using it.  Staged somewhere else, a
+        sub-circuit box comes back with no pins at all and the failure reads
+        as "no pin 'x' on subcell.dig".
+        """
+        base = os.path.dirname(os.path.abspath(near)) if near else None
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = os.path.join(base or tmp, ".digbuild_stage.dig")
+            with open(stage, "w") as fh:
+                fh.write(xml_text)
+            res = subprocess.run(
+                [java, "-cp", classpath(digital_jar, bridge_jar),
+                 "digbridge.DigNetlist", "--pins", stage],
+                capture_output=True, text=True)
+            try:
+                if res.returncode != 0:
+                    raise RuntimeError(f"pin query failed:\n{res.stderr}")
+                return json.loads(res.stdout)
+            finally:
+                if base and os.path.exists(stage):
+                    os.remove(stage)

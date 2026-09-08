@@ -61,7 +61,7 @@ def main():
             fails.append(name)
 
     # ---- build both ciphers ---------------------------------------------
-    for cipher in ("present", "llbc", "speck", "gift"):
+    for cipher in ("present", "llbc", "speck", "gift", "simon"):
         rc, out, dt = run("build", cipher)
         check(f"build {cipher}", rc == 0, _tail(out) if rc else "", dt)
     if fails:
@@ -100,6 +100,11 @@ def main():
           rc == 2 and "not powers of two" in out,
           "" if rc == 2 else _tail(out), dt)
 
+    rc, out, dt = run("verify", "simon", "--rounds", "32", "--trials", "4")
+    check("Simon32/64 reproduces its published vector",
+          rc == 0 and "published vectors: 1/1" in out,
+          "" if rc == 0 else _tail(out), dt)
+
     # ---- differential search --------------------------------------------
     # PRESENT: 4 active S-boxes over three rounds, so weight 8.
     rc, out, dt = run("analyse", "present", "--rounds", "3")
@@ -118,6 +123,14 @@ def main():
         rc, out, dt = run("analyse", "speck", "--rounds", str(n))
         w = _weight(out)
         check(f"Speck {n}-round characteristic weighs {expect:g}",
+              w == expect, f"  [got {w}]" if w != expect else "", dt)
+
+    # Simon's non-linearity is an AND rather than an S-box or an addition,
+    # so these weights exercise a third kind of model.
+    for n, expect in ((2, 2.0), (3, 4.0), (4, 6.0)):
+        rc, out, dt = run("analyse", "simon", "--rounds", str(n))
+        w = _weight(out)
+        check(f"Simon {n}-round characteristic weighs {expect:g}",
               w == expect, f"  [got {w}]" if w != expect else "", dt)
 
     # ---- the published path, pinned round by round ----------------------
