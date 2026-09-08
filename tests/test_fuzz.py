@@ -78,6 +78,8 @@ class Recipe:
                 x = b.sbox_layer(x, arg, tag=f"S{len(self.steps)}")
             elif kind == "xor_const":
                 x = b.xor(x, b.const(arg, x.bits))
+            elif kind == "add_const":
+                x = b.modadd(x, b.const(arg, x.bits))
             elif kind == "not":
                 x = b.not_(x)
             elif kind == "words_reverse":
@@ -125,6 +127,8 @@ class Recipe:
                         for i in range(n // cell))
             elif kind == "xor_const":
                 x ^= arg
+            elif kind == "add_const":
+                x = (x + arg) & m
             elif kind == "not":
                 x = ~x & m
             elif kind == "words_reverse":
@@ -165,6 +169,8 @@ class Recipe:
                 lines.append(f"x = b.sbox_layer(x, {arg})")
             elif kind == "xor_const":
                 lines.append(f"x = b.xor(x, b.const({arg:#x}, x.bits))")
+            elif kind == "add_const":
+                lines.append(f"x = b.modadd(x, b.const({arg:#x}, x.bits))")
             elif kind == "not":
                 lines.append("x = b.not_(x)")
             elif kind == "words_reverse":
@@ -253,6 +259,8 @@ def run_wide_case(bits, steps, jar, bridge, tmp, index):
                 x = (x & ~mask) | (piece << dst)
             elif kind == "xor_const":
                 x ^= arg
+            elif kind == "add_const":
+                x = (x + arg) & m
         return x & m
 
     def split(v):
@@ -295,7 +303,11 @@ def make_recipe(rng, seed):
     depth = rng.randint(1, 5)
     r = Recipe(rng, width, order, depth)
 
-    choices = ["rotl", "rotr", "xor_const", "not", "cut_join"]
+    # add_const is the ARX operation. Its differential behaviour depends on
+    # the values and not only on the difference, which is what makes ARX
+    # analysis harder than S-box analysis -- and what makes it worth having
+    # in the randomised checks rather than only in a hand-written Speck.
+    choices = ["rotl", "rotr", "xor_const", "add_const", "not", "cut_join"]
     if width % 4 == 0:
         choices += ["sbox", "words_reverse", "xor_slices"]
     if width <= 32:
@@ -308,8 +320,8 @@ def make_recipe(rng, seed):
         elif kind == "sbox":
             cell = rng.choice([c for c in (2, 4) if width % c == 0])
             r.steps.append(("sbox", rand_sbox(rng, cell)))
-        elif kind == "xor_const":
-            r.steps.append(("xor_const", rng.getrandbits(width)))
+        elif kind in ("xor_const", "add_const"):
+            r.steps.append((kind, rng.getrandbits(width)))
         elif kind == "not":
             r.steps.append(("not", None))
         elif kind == "words_reverse":

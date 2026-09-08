@@ -314,7 +314,222 @@ LLBC = {
 }
 
 
-REGISTRY = {c["name"]: c for c in (PRESENT, LLBC)}
+# ==========================================================================
+# SPECK 32/64
+#
+#   R. Beaulieu, D. Shors, J. Smith, S. Treatman-Clark, B. Weeks, L. Wingers,
+#   "The SIMON and SPECK Families of Lightweight Block Ciphers",
+#   IACR ePrint 2013/404.
+#
+# Here because it is ARX, and because it is the smallest ARX design there is:
+# the round is three operations. Speck exercises the one thing an S-box
+# cipher never touches -- addition modulo 2^n, whose differential behaviour
+# is where ARX analysis gets hard, since the probability of a difference
+# through an adder depends on the values and not only on the difference.
+#
+#   x = (x >>> 7) + y  (mod 2^16),  x ^= k
+#   y = (y <<< 2) ^ x
+#
+# The rotation amounts are 7 and 2 for the 16-bit word size; larger Speck
+# variants use 8 and 3.
+# ==========================================================================
+
+SPECK_ALPHA, SPECK_BETA = 7, 2
+SPECK_WORD = 16
+
+
+def _speck_round(x, y, k, w=SPECK_WORD, a=SPECK_ALPHA, b=SPECK_BETA):
+    m = (1 << w) - 1
+    x = (((x >> a) | (x << (w - a))) & m)
+    x = (x + y) & m
+    x ^= k
+    y = (((y << b) | (y >> (w - b))) & m) ^ x
+    return x, y
+
+
+def speck_round(b):
+    """
+    One Speck round, with the round key supplied from outside.
+
+    Speck's key schedule is the round function applied to the key words, so
+    drawing it would repeat this circuit; the round keys are computed in the
+    reference instead and handed in, which keeps this example about the ARX
+    operations rather than about wiring.
+    """
+    x = b.inp("x", SPECK_WORD)
+    y = b.inp("y", SPECK_WORD)
+    k = b.inp("rk", SPECK_WORD)
+
+    xr = b.rotr(x, SPECK_ALPHA)
+    xn = b.xor(b.modadd(xr, y), k)
+    yn = b.xor(b.rotl(y, SPECK_BETA), xn)
+
+    b.out("x'", xn)
+    b.out("y'", yn)
+
+
+def _speck_round_keys(key, rounds):
+    """l[2], l[1], l[0], k[0] packed little-endian, as the paper writes it."""
+    m = (1 << SPECK_WORD) - 1
+    words = [(key >> (SPECK_WORD * i)) & m for i in range(4)]
+    k = [words[0]]
+    ell = words[1:]
+    for i in range(rounds - 1):
+        new_l, new_k = _speck_round(ell[i % len(ell)], k[i], i)
+        ell.append(new_l)
+        k.append(new_k)
+    return k
+
+
+def speck_reference(plaintext, key, rounds=22):
+    m = (1 << SPECK_WORD) - 1
+    x, y = (plaintext >> SPECK_WORD) & m, plaintext & m
+    for k in _speck_round_keys(key, rounds):
+        x, y = _speck_round(x, y, k)
+    return (x << SPECK_WORD) | y
+
+
+SPECK = {
+    "name": "speck",
+    "parts": {"round": speck_round},
+    "reference": speck_reference,
+    "state": ["x", "y"],
+    "block_bits": 32,
+    "key_bits": 64,
+    "rounds": 22,
+    "bit_order": "lsb",
+    # From the SIMON and SPECK paper's test-vector appendix.
+    "vectors": [(0x6574694C, 0x1918111009080100, 0xA86842F2)],
+    "params": lambda i, key: {"rk": _speck_round_keys(key, 22)[i]},
+    "note": "ARX. The key schedule reuses the round function, so round keys "
+            "are supplied from the reference rather than drawn.",
+}
+
+
+# ==========================================================================
+# GIFT-64-128
+#
+#   S. Banik, S. K. Pandey, T. Peyrin, Y. Sasaki, S. M. Sim, Y. Todo,
+#   "GIFT: A Small Present", CHES 2017.
+#
+# The third SPN here, and deliberately close to PRESENT: same shape, 4-bit
+# S-boxes and a bit permutation, so the two can be built from the same parts
+# and any assumption baked into having only PRESENT shows up.
+#
+# It differs in the two places that matter. The round key touches only two
+# bits of each nibble rather than the whole state, so AddRoundKey is a
+# masked XOR rather than a plain one; and the round constant is a 6-bit LFSR
+# scattered across bits 3, 7, ..., 23 with bit 63 always set. Both are stated
+# as constants supplied per round rather than drawn, because they change
+# every round and a constant on the schematic could not.
+# ==========================================================================
+
+GIFT_SBOX = [1, 0xA, 4, 0xC, 6, 0xF, 3, 9,
+             2, 0xD, 0xB, 7, 5, 0, 8, 0xE]
+
+
+def _gift_p(i):
+    """PermBits: input bit i moves to output bit P(i)."""
+    return 4 * (i // 16) + 16 * ((3 * ((i % 16) // 4) + (i % 4)) % 4)         + (i % 4)
+
+
+GIFT_P = [_gift_p(i) for i in range(64)]
+
+# permute() states a permutation the other way round: out j takes in MAP[j].
+GIFT_PMAP = [0] * 64
+for _i, _p in enumerate(GIFT_P):
+    GIFT_PMAP[_p] = _i
+
+
+def gift_round(b):
+    """
+    One GIFT-64 round: SubCells, PermBits, AddRoundKey.
+
+    `rk` arrives already spread across the state -- bit 4i takes v_i and bit
+    4i+1 takes u_i -- and `rc` already carries the round constant in bits 3,
+    7, ..., 23 and bit 63. Doing that spreading here would mean drawing
+    thirty-two single-bit XORs; doing it in the driver keeps the round
+    function to the three operations the specification names.
+    """
+    state = b.inp("state", 64)
+    rk = b.inp("rk", 64)
+    rc = b.inp("rc", 64)
+
+    x = b.sbox_layer(state, GIFT_SBOX, tag="S")
+    x = b.permute(x, GIFT_PMAP)
+    b.out("state'", b.xor(x, rk, rc))
+
+
+def _gift_key_schedule(key, rounds):
+    """
+    Round keys and constants, as (rk, rc) already positioned in the state.
+
+    The key state is eight 16-bit words; each round takes u = k1 and v = k0,
+    then rotates the whole state by two words with k0 and k1 rotated by 12
+    and 2 on the way out.
+    """
+    w = [(key >> (16 * i)) & 0xFFFF for i in range(8)]
+    c, out = 0, []
+    for _ in range(rounds):
+        c = ((c << 1) | (((c >> 5) & 1) ^ ((c >> 4) & 1) ^ 1)) & 0x3F
+        u, v = w[1], w[0]
+        rk = 0
+        for i in range(16):
+            if (v >> i) & 1:
+                rk |= 1 << (4 * i)
+            if (u >> i) & 1:
+                rk |= 1 << (4 * i + 1)
+        rc = 1 << 63
+        for j in range(6):
+            if (c >> j) & 1:
+                rc |= 1 << (4 * j + 3)
+        out.append((rk, rc))
+        k0, k1 = w[0], w[1]
+        w = w[2:] + [((k0 >> 12) | (k0 << 4)) & 0xFFFF,
+                     ((k1 >> 2) | (k1 << 14)) & 0xFFFF]
+    return out
+
+
+def gift_reference(plaintext, key, rounds=28):
+    state = plaintext
+    for rk, rc in _gift_key_schedule(key, rounds):
+        state = sum(GIFT_SBOX[(state >> (4 * i)) & 0xF] << (4 * i)
+                    for i in range(16))
+        moved = 0
+        for i in range(64):
+            if (state >> i) & 1:
+                moved |= 1 << GIFT_P[i]
+        state = moved ^ rk ^ rc
+    return state
+
+
+GIFT = {
+    "name": "gift",
+    "parts": {"round": gift_round},
+    "reference": gift_reference,
+    "state": ["state"],
+    "block_bits": 64,
+    "key_bits": 128,
+    "rounds": 28,
+    "bit_order": "lsb",
+    # From the CHES 2017 appendix. The paper lists three; the second is
+    # omitted here because it could not be confirmed against a second source
+    # and a vector nobody has checked is worse than no vector at all.
+    "vectors": [
+        (0x0000000000000000, 0x00000000000000000000000000000000,
+         0xF62BC3EF34F775AC),
+        (0xC450C7727A9B8A7D, 0xBD91731EB6BC2713A1F9F6FFC75044E7,
+         0xE3272885FA94BA8B),
+    ],
+    "params": lambda i, key: dict(zip(
+        ("rk", "rc"), _gift_key_schedule(key, 28)[i])),
+    "note": "the round key reaches only two bits of each nibble, and the "
+            "round constant is a 6-bit LFSR; both are positioned by the "
+            "driver rather than drawn.",
+}
+
+
+REGISTRY = {c["name"]: c for c in (PRESENT, LLBC, SPECK, GIFT)}
 
 
 def claasp_kwargs(spec, rounds, outdir, key=0):

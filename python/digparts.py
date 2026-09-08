@@ -139,6 +139,7 @@ class Builder:
         self.top = top
         self._x = 100
         self._one = None
+        self._zero = None
         self._taken = set()
 
     # ------------------------------------------------------------ placement
@@ -265,6 +266,41 @@ class Builder:
                       Bits=port.bits)
         self.c.connect(port.as_link(), (g, "in"))
         return Port(g, "out", port.bits)
+
+    def modadd(self, a, b, y=None):
+        """
+        Addition modulo 2^n -- the A in ARX.
+
+        Digital's Add carries a `c_i` input and a `c_o` output. The carry in
+        has to be tied low or the sum is undefined, and the carry out is
+        discarded, which is exactly what addition modulo 2^n means: the
+        overflow is thrown away rather than widening the word.
+
+        Without this, Speck, LEA, HIGHT, Chaskey and every other ARX design
+        cannot be drawn at all.
+        """
+        if a.bits != b.bits:
+            raise ValueError(
+                f"modadd operands differ in width: {a.bits} vs {b.bits}")
+        g = self._add("Add", self._col(), y if y is not None else self.top,
+                      Bits=a.bits)
+        self.c.connect(a.as_link(), (g, "a"))
+        self.c.connect(b.as_link(), (g, "b"))
+        self.c.connect((self.zero, "out"), (g, "c_i"))
+        return Port(g, "s", a.bits)
+
+    @property
+    def zero(self):
+        """
+        A shared constant 0, for the carry input every Add needs tied low.
+
+        Shared for the same reason `one` is: one component feeding every
+        adder keeps the drawing and the netlist small.
+        """
+        if self._zero is None:
+            self._zero = self._add("Const", 100, self.top - 250,
+                                   Value=0, Bits=1)
+        return self._zero
 
     def rotl(self, port, amount, y=None):
         """

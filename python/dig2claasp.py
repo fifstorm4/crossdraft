@@ -69,6 +69,7 @@ from javacp import classpath          # noqa: F401
 SUPPORTED = {
     "In", "Out", "XOr", "And", "Or", "Not", "NAnd", "NOr",
     "ROM", "Splitter", "Const", "Tunnel", "Testcase", "Text", "Rectangle",
+    "Add",
 }
 
 SEQUENTIAL = {
@@ -412,9 +413,24 @@ def check(nl, allow_unconnected=False):
     # rotation and every wide register is built.  A dangling pin anywhere
     # else is the most common circuit mistake and is invisible in the .dig
     # file, so it still stops the translation.
-    loose = [u for u in nl.unconnected
-             if not (nl.components[u["component"]]["type"] == "Splitter"
-                     and u["dir"] == "output")]
+    # Two outputs are meant to be left dangling.
+    #
+    # A splitter's unused ports: cutting bits [5,20) out of a word
+    # necessarily leaves the two ends over, and slicing is how every rotation
+    # and every wide register is built.
+    #
+    # An adder's carry out: discarding it is precisely what addition modulo
+    # 2^n means. Wiring it somewhere would make the circuit compute something
+    # else.
+    ignorable = {"Splitter": None, "Add": {"c_o"}}
+    loose = []
+    for u in nl.unconnected:
+        t = nl.components[u["component"]]["type"]
+        if u["dir"] == "output" and t in ignorable:
+            allowed = ignorable[t]
+            if allowed is None or u["pin"] in allowed:
+                continue
+        loose.append(u)
     if loose and not allow_unconnected:
         detail = ", ".join(f"{u['component']}.{u['pin']}" for u in loose[:8])
         raise ValueError(
@@ -508,6 +524,16 @@ def evaluate(nl, inputs, trace=False):
         elif t == "Not":
             b = bits_of(comp, src[0][1])
             res = [((~src[0][0]) & ((1 << b) - 1), b)]
+
+        elif t == "Add":
+            # a + b + carry-in, keeping the sum and the carry out separate.
+            # The sum is addition modulo 2^n; CLAASP models it that way and
+            # discards the carry, so the two agree only if the carry in is
+            # tied low, which digparts.modadd does.
+            b = bits_of(comp, max((w for _, w in src), default=1))
+            vals = [v for v, _ in src]
+            total = sum(vals)
+            res = [(total & ((1 << b) - 1), b), (total >> b, 1)]
 
         elif t == "ROM":
             table = sbox_table(comp)
@@ -899,6 +925,16 @@ def build_cipher(round_json, rounds=1, params=None, key_json=None,
                                              for o in src))
                     res, targets = [self._xor(src, size)], \
                         netlist_.outputs_of(cid)
+                elif t == "Add":
+                    # CLAASP's MODADD is addition modulo 2^n, so it maps the
+                    # sum output and has nothing to say about the carry.
+                    # digparts.modadd ties the carry in low, which is what
+                    # makes the two definitions the same operation.
+                    size = bits_of(comp, max(sum(len(p) for p in o[1])
+                                             for o in src))
+                    res = [self._modadd(src, size), None]
+                    targets = netlist_.outputs_of(cid)
+
                 elif t == "ROM":
                     res, targets = [self._sbox(src[0], sbox_table(comp),
                                                bits_of(comp, 4))], \
@@ -916,7 +952,8 @@ def build_cipher(round_json, rounds=1, params=None, key_json=None,
                     raise NotImplementedError(f"no CLAASP rule for {t!r}")
 
                 for (_, nid), r in zip(targets, res):
-                    op[nid] = r
+                    if r is not None:      # Add's carry out has no model
+                        op[nid] = r
 
             outs = netlist_.labelled("Out")
             new = {}
@@ -945,6 +982,18 @@ def build_cipher(round_json, rounds=1, params=None, key_json=None,
                 pos += o[1]
             return ([self.add_XOR_component(ids, pos, size).id],
                     [list(range(size))])
+
+        def _modadd(self, operands, size):
+            # Only the two data inputs; the carry input is a constant zero
+            # and adding it would widen the operand list CLAASP expects.
+            ids, pos = [], []
+            for o in operands:
+                width = sum(len(p) for p in o[1])
+                if width == size:
+                    ids += o[0]
+                    pos += o[1]
+            cid = self.add_MODADD_component(ids, pos, size).id
+            return ([cid], [list(range(size))])
 
         def _gate(self, t, operands, size):
             ids, pos = [], []

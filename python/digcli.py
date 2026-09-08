@@ -140,9 +140,18 @@ def cmd_build(args):
         # every wide register is built. A dangling pin anywhere else is a
         # real mistake and is invisible in the .dig file.
         types = {c["id"]: c["type"] for c in data["components"]}
-        loose = [u for u in data.get("unconnected", [])
-                 if not (types.get(u["component"]) == "Splitter"
-                         and u["dir"] == "output")]
+        # A splitter's unused ports and an adder's carry out are meant to
+        # dangle: slicing always leaves ends over, and discarding the carry
+        # is what makes an addition modular.
+        ignorable = {"Splitter": None, "Add": {"c_o"}}
+        loose = []
+        for u in data.get("unconnected", []):
+            t = types.get(u["component"])
+            if u["dir"] == "output" and t in ignorable:
+                allowed = ignorable[t]
+                if allowed is None or u["pin"] in allowed:
+                    continue
+            loose.append(u)
         print(f"  {part:8s} {len(data['components']):4d} components, "
               f"{len(data['nets']):3d} nets" +
               (f"  ** {len(loose)} UNCONNECTED PIN(S) **" if loose else ""))
@@ -355,8 +364,35 @@ def cmd_analyse(args):
                             list(range(spec["block_bits"])),
                             [0] * spec["block_bits"]),
     ]
-    trail = model.find_lowest_weight_xor_differential_trail(
-        fixed_values=fixed, solver_name=args.solver)
+    try:
+        trail = model.find_lowest_weight_xor_differential_trail(
+            fixed_values=fixed, solver_name=args.solver)
+    except ValueError as e:
+        if "not a power of two" not in str(e):
+            raise
+        # A SAT model spends one variable per bit of weight, so it can only
+        # express probabilities that are powers of two. An S-box whose DDT
+        # holds, say, a 6 has transitions of probability 6/16, and the model
+        # cannot say that. GIFT is the common example.
+        print()
+        print(f"  This cipher's S-box has DDT entries that are not powers of "
+              f"two, so the SAT model")
+        print(f"  cannot represent their probabilities: {e}")
+        print()
+        print(f"  The cipher itself is fine -- `verify` still checks it "
+              f"against its test vectors.")
+        print(f"  For differential search, CLAASP's SMT and MILP models "
+              f"handle fractional weights;")
+        print(f"  they are reachable through the library directly:")
+        print()
+        print(f"    from ciphers import load")
+        print(f"    from claasp.cipher_modules.models.smt.smt_models"
+              f".smt_xor_differential_model \\")
+        print(f"        import SmtXorDifferentialModel")
+        print(f"    c = load({spec['name']!r}, {rounds}, "
+              f"{_outdir(spec, args)!r})")
+        print(f"    SmtXorDifferentialModel(c)")
+        return 2
     w = trail["total_weight"]
     print(f"  best differential characteristic over {rounds} rounds: "
           f"weight {w}  (probability 2^-{w})")

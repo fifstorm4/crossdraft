@@ -284,6 +284,7 @@ wires are all handled.
 | helper | emits |
 |---|---|
 | `xor(a, b, …)` `gate("And", …)` `not_(x)` | a gate across the whole bus |
+| `modadd(a, b)` | addition modulo 2^n — the A in ARX |
 | `rotl(x, n)` `rotr(x, n)` | two splitters, later recognised as one CLAASP rotate |
 | `sbox_layer(x, table)` | splitter, one ROM per cell, merger |
 | `words(x, 16)` `join([…])` | slice a register into words and back |
@@ -306,7 +307,28 @@ LLBC = {
 }
 ```
 
-Copy either worked example and replace the round function. Nothing else in the
+`modadd` ties the adder's carry in low and discards its carry out, which is
+what makes the operation modular: the overflow is thrown away rather than
+widening the word. Without it Speck, LEA, HIGHT and Chaskey cannot be drawn
+at all, and the differential behaviour of an adder — which depends on the
+values and not only on the difference — is the thing S-box ciphers never
+exercise.
+
+Copy any of the four worked examples and replace the round function.
+
+| example | shape | what it exercises |
+|---|---|---|
+| PRESENT-80 | SPN | bit permutation, an 80-bit key register drawn as a `Wide` |
+| LLBC-128-128 | Feistel | rotations, two S-box banks, a drawn key schedule |
+| Speck32/64 | ARX | `modadd`, where the differential depends on values not just differences |
+| GIFT-64-128 | SPN | a round key that reaches only two bits per nibble |
+
+GIFT is worth a note. Its S-box has DDT entries that are not powers of two,
+so a transition can have probability 6/16 — and a SAT model, which spends one
+variable per bit of weight, cannot say that. `analyse` detects this and points
+at CLAASP's SMT and MILP models instead of crashing. The cipher is fine;
+`verify` still checks it against the paper. It is the solver that cannot
+follow. Nothing else in the
 toolchain needs to know about the new cipher.
 
 ### Why three descriptions of the same cipher
@@ -509,6 +531,9 @@ the search still finishes in seconds.
 | cipher | check | result |
 |---|---|---|
 | PRESENT | published vectors, key schedule drawn | 4/4 |
+| Speck32/64 | published vector (ePrint 2013/404) | 1/1 |
+| GIFT-64-128 | published vectors (CHES 2017) | 2/2 |
+| Speck32/64 | trails vs CLAASP's own Speck, 2–5 rounds | weights 1, 3, 5, 9 — identical |
 | PRESENT | circuit vs reference, 1/2/5/31 rounds | all agree |
 | PRESENT | key avalanche, 31 rounds | 32.70 of 64 bits, ideal 32 |
 | PRESENT | differential, 3 and 4 rounds | weight 8 and 12 — 4 and 6 active S-boxes, the known bounds |

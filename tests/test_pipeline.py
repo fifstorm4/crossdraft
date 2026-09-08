@@ -61,7 +61,7 @@ def main():
             fails.append(name)
 
     # ---- build both ciphers ---------------------------------------------
-    for cipher in ("present", "llbc"):
+    for cipher in ("present", "llbc", "speck", "gift"):
         rc, out, dt = run("build", cipher)
         check(f"build {cipher}", rc == 0, _tail(out) if rc else "", dt)
     if fails:
@@ -79,6 +79,27 @@ def main():
           rc == 0 and "20 rounds: 4/4" in out,
           "" if rc == 0 else _tail(out), dt)
 
+    # Speck's published test vector, and its published optimal trail weights.
+    rc, out, dt = run("verify", "speck", "--rounds", "22", "--trials", "4")
+    check("Speck32/64 reproduces its published vector",
+          rc == 0 and "published vectors: 1/1" in out,
+          "" if rc == 0 else _tail(out), dt)
+
+    rc, out, dt = run("verify", "gift", "--rounds", "28", "--trials", "4")
+    check("GIFT-64-128 reproduces its published vectors",
+          rc == 0 and "published vectors: 2/2" in out,
+          "" if rc == 0 else _tail(out), dt)
+
+    # GIFT's DDT holds a 6, so its transition probabilities are not powers of
+    # two and the SAT model cannot express them. The command should say that
+    # plainly and point at the SMT and MILP models rather than crash: a
+    # limitation of the solver is not a fault in the cipher, and `verify`
+    # above has already checked the circuit against the paper.
+    rc, out, dt = run("analyse", "gift", "--rounds", "2")
+    check("GIFT explains why SAT cannot search it",
+          rc == 2 and "not powers of two" in out,
+          "" if rc == 2 else _tail(out), dt)
+
     # ---- differential search --------------------------------------------
     # PRESENT: 4 active S-boxes over three rounds, so weight 8.
     rc, out, dt = run("analyse", "present", "--rounds", "3")
@@ -90,6 +111,14 @@ def main():
     w = _weight(out)
     check("LLBC 3-round characteristic weighs 8", w == 8.0,
           f"  [got {w}]" if w != 8.0 else "", dt)
+
+    # Weights 1, 3, 5 over two to four rounds are the known optima for
+    # Speck32/64, and they exercise modular addition rather than S-boxes.
+    for n, expect in ((2, 1.0), (3, 3.0), (4, 5.0)):
+        rc, out, dt = run("analyse", "speck", "--rounds", str(n))
+        w = _weight(out)
+        check(f"Speck {n}-round characteristic weighs {expect:g}",
+              w == expect, f"  [got {w}]" if w != expect else "", dt)
 
     # ---- the published path, pinned round by round ----------------------
     trail = os.path.join(EXAMPLES, "llbc_table6.csv")
