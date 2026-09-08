@@ -16,6 +16,11 @@ cd crossdraft
 dir
 ```
 
+**アーカイブをリポジトリの中に置かないでください。** `crossdraft.tar.gz` を
+`C:\crossdraft` に置いて展開すると、その中にもう一組のツリーができます。Git は
+それを追跡しますが CI は無視する（GitHub はルートの `.github/workflows` しか
+読まない）ので、静かに古くなります。`$HOME\Downloads` から直接展開してください。
+
 `Dockerfile`、`run.ps1`、`python`、`java`、`tests` が見えれば成功です。
 
 Windows 10 以降なら `tar` は標準で入っています。無ければ 7-Zip で2回展開（`.gz` → `.tar`）してください。

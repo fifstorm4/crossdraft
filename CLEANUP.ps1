@@ -3,8 +3,9 @@
   Remove stray copies and fix line endings, once.
 
 .DESCRIPTION
-  Files presented individually alongside the tarball end up at the repository
-  root if they are extracted there: a second ci.yml beside the real one under
+  Extracting the tarball inside the repository leaves a nested copy of the
+  whole tree; extracting individually-presented files there leaves loose
+  copies at the root: a second ci.yml beside the real one under
   .github/workflows, a second test_gui.py beside tests/. They are dead copies
   that drift out of step with the originals, and a stray ci.yml at the root
   does nothing at all -- GitHub only reads .github/workflows.
@@ -31,6 +32,16 @@ $strays = @(
     "test_analysis.py", "test_statistical.py", "test_present_reference.py",
     "llbc_round.py", "llbc_loop.py", "llbc_table6.csv", "Makefile"
 )
+
+# A whole second copy of the tree, from extracting the tarball into the
+# repository rather than over it. Git tracks it, CI ignores it -- GitHub only
+# reads .github/workflows at the root -- so it drifts silently out of date
+# and anyone browsing the repository finds two versions of every file.
+if (Test-Path "crossdraft" -PathType Container) {
+    Write-Host "  removing a nested copy of the whole tree (crossdraft/)" -ForegroundColor Yellow
+    git rm -r --cached -q crossdraft 2>$null | Out-Null
+    Remove-Item -Recurse -Force crossdraft
+}
 
 $removed = 0
 foreach ($f in $strays) {
