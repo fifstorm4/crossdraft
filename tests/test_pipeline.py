@@ -61,7 +61,7 @@ def main():
             fails.append(name)
 
     # ---- build both ciphers ---------------------------------------------
-    for cipher in ("present", "llbc", "speck", "gift", "simon"):
+    for cipher in ("present", "llbc", "speck", "gift", "simon", "skinny"):
         rc, out, dt = run("build", cipher)
         check(f"build {cipher}", rc == 0, _tail(out) if rc else "", dt)
     if fails:
@@ -105,6 +105,11 @@ def main():
           rc == 0 and "published vectors: 1/1" in out,
           "" if rc == 0 else _tail(out), dt)
 
+    rc, out, dt = run("verify", "skinny", "--rounds", "36", "--trials", "4")
+    check("SKINNY-64-128 reproduces its published vector",
+          rc == 0 and "published vectors: 1/1" in out,
+          "" if rc == 0 else _tail(out), dt)
+
     # ---- differential search --------------------------------------------
     # PRESENT: 4 active S-boxes over three rounds, so weight 8.
     rc, out, dt = run("analyse", "present", "--rounds", "3")
@@ -131,6 +136,17 @@ def main():
         rc, out, dt = run("analyse", "simon", "--rounds", str(n))
         w = _weight(out)
         check(f"Simon {n}-round characteristic weighs {expect:g}",
+              w == expect, f"  [got {w}]" if w != expect else "", dt)
+
+    # SKINNY's minimum active S-box counts over one to five rounds are 1, 2,
+    # 5, 8 and 12, published in CRYPTO 2016. They are the external check on
+    # MixColumns: the counts come out of the matrix, so getting them right
+    # means the binary expansion of the matrix is right.
+    for n, expect in ((1, 2.0), (2, 4.0), (3, 10.0), (4, 16.0), (5, 24.0)):
+        rc, out, dt = run("analyse", "skinny", "--rounds", str(n))
+        w = _weight(out)
+        check(f"SKINNY {n} round(s): weight {expect:g}, "
+              f"{int(expect / 2)} active S-boxes",
               w == expect, f"  [got {w}]" if w != expect else "", dt)
 
     # ---- the published path, pinned round by round ----------------------

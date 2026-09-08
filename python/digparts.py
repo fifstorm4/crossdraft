@@ -417,6 +417,104 @@ class Builder:
         self._col(400)
         return Port(mg, SP(str(n), 0), n)
 
+    @staticmethod
+    def gf_matrix_to_binary(matrix, cell_bits, poly=None):
+        """
+        Expand a matrix over GF(2^m) into the equivalent matrix over GF(2).
+
+        Multiplying by a constant in GF(2^m) is a linear map on the m bits of
+        a cell, so it is an m-by-m binary matrix -- which means a MixColumns
+        over any field, with any irreducible polynomial, is just a bigger
+        binary matrix. There is nothing to look up.
+
+        That is worth saying because the obvious alternative is a table per
+        constant per field, one set for AES, another for LED, another for
+        whatever comes next. It is also worse for analysis: a table becomes
+        an S-box in the model, and an 8-bit S-box is 256 entries standing in
+        for a map that is linear and therefore free. As XOR, a differential
+        passes with probability one, which is the truth.
+
+        matrix    rows of GF(2^m) constants, e.g. [[2,3,1,1], ...] for AES
+        cell_bits m
+        poly      the irreducible polynomial as an integer with the leading
+                  term included -- 0x11B for AES, 0x13 for GF(2^4) with
+                  x^4+x+1. None means the entries are already 0 or 1 and no
+                  field arithmetic happens, which covers SKINNY and Midori.
+        """
+        rows, cols = len(matrix), len(matrix[0])
+        n_in, n_out = cols * cell_bits, rows * cell_bits
+        out = [[0] * n_in for _ in range(n_out)]
+
+        def mul(a, b):
+            """a * b in GF(2^cell_bits)."""
+            if poly is None:
+                return a & b if a in (0, 1) else 0
+            r = 0
+            for i in range(cell_bits):
+                if (b >> i) & 1:
+                    r ^= a << i
+            for i in range(2 * cell_bits - 1, cell_bits - 1, -1):
+                if (r >> i) & 1:
+                    r ^= poly << (i - cell_bits)
+            return r & ((1 << cell_bits) - 1)
+
+        # Column j of the binary matrix is the image of the unit vector with
+        # only that bit set, so multiplying each basis element out gives the
+        # whole thing.
+        for c in range(cols):
+            for bit in range(cell_bits):
+                unit = 1 << bit
+                for r in range(rows):
+                    prod = mul(matrix[r][c], unit) if poly is not None \
+                        else (unit if matrix[r][c] else 0)
+                    for ob in range(cell_bits):
+                        if (prod >> ob) & 1:
+                            out[r * cell_bits + ob][c * cell_bits + bit] ^= 1
+        return out
+
+    def mix_columns(self, ports, matrix, cell_bits, poly=None, y=None):
+        """
+        Apply a matrix over GF(2^m) to a column of cells.
+
+        `ports` are the cells of one column, most significant first, as a
+        specification writes them. Returns the same number of cells.
+
+        Emitted as XOR trees over the binary expansion, so a differential
+        passes through with probability one and the solver has nothing to
+        search. SKINNY and Midori pass poly=None because their matrices are
+        already binary; AES passes 0x11B.
+        """
+        if len(ports) != len(matrix[0]):
+            raise ValueError(
+                f"{len(ports)} cells but the matrix takes "
+                f"{len(matrix[0])}")
+        binary = self.gf_matrix_to_binary(matrix, cell_bits, poly)
+        n_out = len(binary)
+
+        # Split every input cell into single bits once, then XOR the ones
+        # each output bit needs.
+        bits = []
+        for port in ports:
+            bits.extend(self.words(port, 1, y=y))
+
+        out_cells = []
+        for r in range(n_out // cell_bits):
+            cell_bits_out = []
+            for ob in range(cell_bits):
+                row = binary[r * cell_bits + ob]
+                terms = [bits[i] for i, v in enumerate(row) if v]
+                if not terms:
+                    cell_bits_out.append(self.const(0, 1, y=y))
+                elif len(terms) == 1:
+                    cell_bits_out.append(terms[0])
+                else:
+                    acc = terms[0]
+                    for t in terms[1:]:
+                        acc = self.xor(acc, t, y=y)
+                    cell_bits_out.append(acc)
+            out_cells.append(self.join(cell_bits_out, y=y))
+        return out_cells
+
     def permute(self, port, mapping, y=None):
         """
         Arbitrary bit permutation: output bit j takes input bit mapping[j].

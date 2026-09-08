@@ -310,6 +310,7 @@ wires are all handled.
 | `sbox_layer(x, table)` | splitter, one ROM per cell, merger |
 | `words(x, 16)` `join([…])` | slice a register into words and back |
 | `permute(x, mapping)` | bit permutation, `out j <- in mapping[j]` |
+| `mix_columns(cells, matrix, cell_bits, poly)` | a matrix over GF(2^m), as XOR |
 | `inp` `out` `const` `testcase` | boundary and test data |
 
 A cipher is then one dictionary in `ciphers.py`:
@@ -328,6 +329,19 @@ LLBC = {
 }
 ```
 
+`mix_columns` takes the matrix as a specification writes it and expands it
+into the equivalent matrix over GF(2), so nothing has to be looked up. A
+multiplication by a constant in GF(2^m) is a linear map on the m bits of a
+cell, which is an m-by-m binary matrix; a MixColumns over any field with any
+irreducible polynomial is therefore just a bigger one. SKINNY and Midori pass
+`poly=None` because their matrices are already binary; AES passes `0x11B`.
+
+The alternative — a lookup table per constant per field — is worse twice
+over. It needs a new table for every design, and in the model a table becomes
+an S-box, so an 8-bit multiplication turns into 256 entries standing in for a
+map that is linear and therefore free. As XOR, a difference passes with
+probability one, which is what actually happens.
+
 `modadd` ties the adder's carry in low and discards its carry out, which is
 what makes the operation modular: the overflow is thrown away rather than
 widening the word. Without it Speck, LEA, HIGHT and Chaskey cannot be drawn
@@ -335,7 +349,7 @@ at all, and the differential behaviour of an adder — which depends on the
 values and not only on the difference — is the thing S-box ciphers never
 exercise.
 
-Copy any of the five worked examples and replace the round function.
+Copy any of the six worked examples and replace the round function.
 
 | example | shape | what it exercises |
 |---|---|---|
@@ -344,6 +358,7 @@ Copy any of the five worked examples and replace the round function.
 | Speck32/64 | ARX | `modadd`, where the differential depends on values not just differences |
 | GIFT-64-128 | SPN | a round key that reaches only two bits per nibble |
 | Simon32/64 | AND-RX | a bitwise AND as the non-linearity — no table, no carry |
+| SKINNY-64-128 | SPN | MixColumns, and a tweakey schedule that is a shuffle |
 
 GIFT is worth a note. Its S-box has DDT entries that are not powers of two,
 so a transition can have probability 6/16 — and a SAT model, which spends one
@@ -556,6 +571,8 @@ the search still finishes in seconds.
 | Speck32/64 | published vector (ePrint 2013/404) | 1/1 |
 | GIFT-64-128 | published vectors (CHES 2017) | 2/2 |
 | Simon32/64 | published vector (ePrint 2013/404) | 1/1 |
+| SKINNY-64-128 | published vector (CRYPTO 2016) | 1/1 |
+| SKINNY-64-128 | minimum active S-boxes, 1–5 rounds | 1, 2, 5, 8, 12 — the published bounds |
 | Simon32/64 | trails vs CLAASP's own Simon, 2–6 rounds | weights 2, 4, 6, 8, 12 — identical |
 | Speck32/64 | trails vs CLAASP's own Speck, 2–5 rounds | weights 1, 3, 5, 9 — identical |
 | PRESENT | circuit vs reference, 1/2/5/31 rounds | all agree |

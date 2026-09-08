@@ -634,7 +634,165 @@ SIMON = {
 }
 
 
-REGISTRY = {c["name"]: c for c in (PRESENT, LLBC, SPECK, GIFT, SIMON)}
+# ==========================================================================
+# SKINNY-64-128
+#
+#   C. Beierle, J. Jean, S. Kolbl, G. Leander, A. Moradi, T. Peyrin,
+#   Y. Sasaki, P. Sasdrich, S. M. Sim, "The SKINNY Family of Block Ciphers
+#   and its Low-Latency Variant MANTIS", CRYPTO 2016.
+#
+# Here for MixColumns. SKINNY's matrix is binary -- no field multiplication
+# at all -- which is the easy end of the same machinery that handles AES, and
+# it means the round is four XORs per column rather than a table lookup.
+#
+# The tweakey is the other reason. Two 64-bit words are permuted every round
+# and one of them is also stepped through a 4-bit LFSR, so the key schedule
+# is a shuffle rather than an arithmetic recurrence. It is supplied from the
+# reference here rather than drawn, for the same reason PRESENT's round keys
+# once were: a cell permutation is sixteen wires and no logic, and drawing it
+# would say nothing the constant does not.
+# ==========================================================================
+
+SKINNY_SBOX = [12, 6, 9, 0, 1, 10, 2, 11, 3, 8, 5, 13, 4, 14, 7, 15]
+
+#: SKINNY's MixColumns. Binary, so mix_columns takes poly=None.
+SKINNY_MC = [[1, 0, 1, 1],
+             [1, 0, 0, 0],
+             [0, 1, 1, 0],
+             [1, 0, 1, 0]]
+
+#: The tweakey cell permutation P_T.
+SKINNY_PT = [9, 15, 8, 13, 10, 14, 12, 11, 0, 1, 2, 3, 4, 5, 6, 7]
+
+SKINNY_CELL = 4
+SKINNY_ROUNDS = 36
+
+
+def _skinny_cells(x, n=16, w=SKINNY_CELL):
+    return [(x >> (w * (n - 1 - i))) & ((1 << w) - 1) for i in range(n)]
+
+
+def _skinny_pack(c, w=SKINNY_CELL):
+    v = 0
+    for x in c:
+        v = (v << w) | x
+    return v
+
+
+def _skinny_rcs(n):
+    """Round constants from a 6-bit LFSR."""
+    out, c = [], 0
+    for _ in range(n):
+        c = ((c << 1) | (((c >> 5) & 1) ^ ((c >> 4) & 1) ^ 1)) & 0x3F
+        out.append(c)
+    return out
+
+
+def _skinny_lfsr4(x):
+    """TK2's cell update: (x3 x2 x1 x0) -> (x2 x1 x0, x3 xor x2)."""
+    return ((x << 1) & 0xF) | (((x >> 3) & 1) ^ ((x >> 2) & 1))
+
+
+def skinny_round(b):
+    """
+    One SKINNY round: SubCells, AddConstants and AddRoundTweakey, ShiftRows,
+    MixColumns.
+
+    `rtk` arrives with the round tweakey and the round constants already
+    positioned across the state, because both are shuffles of material the
+    driver already holds; drawing them would be sixteen wires and no logic.
+    What is drawn is the part that is actually a computation.
+    """
+    state = b.inp("state", 64)
+    rtk = b.inp("rtk", 64)
+
+    x = b.sbox_layer(state, SKINNY_SBOX, tag="S")
+    x = b.xor(x, rtk)
+
+    # ShiftRows and MixColumns both work on cells, so take the state apart
+    # once. words() hands them back least significant first; the
+    # specification numbers them the other way, hence the reversal.
+    cells = list(reversed(b.words(x, SKINNY_CELL)))
+    shifted = [cells[4 * (i // 4) + ((i % 4) - (i // 4)) % 4]
+               for i in range(16)]
+
+    mixed = [None] * 16
+    for col in range(4):
+        column = [shifted[4 * r + col] for r in range(4)]
+        for r, cell in enumerate(b.mix_columns(column, SKINNY_MC,
+                                               SKINNY_CELL)):
+            mixed[4 * r + col] = cell
+
+    b.out("state'", b.join(list(reversed(mixed))))
+
+
+def _skinny_round_tweakeys(tweakey, rounds=SKINNY_ROUNDS):
+    """
+    Round tweakeys with the round constants folded in.
+
+    Only the first two rows take tweakey material; the constants land on
+    cells 0, 4 and 8. Combining them here means the round circuit sees one
+    64-bit value to XOR rather than two.
+    """
+    tk1 = _skinny_cells((tweakey >> 64) & ((1 << 64) - 1))
+    tk2 = _skinny_cells(tweakey & ((1 << 64) - 1))
+    out = []
+    for c in _skinny_rcs(rounds):
+        rtk = [0] * 16
+        for i in range(8):
+            rtk[i] = tk1[i] ^ tk2[i]
+        rtk[0] ^= c & 0xF
+        rtk[4] ^= (c >> 4) & 0x3
+        rtk[8] ^= 0x2
+        out.append(_skinny_pack(rtk))
+        tk1 = [tk1[SKINNY_PT[i]] for i in range(16)]
+        tk2 = [tk2[SKINNY_PT[i]] for i in range(16)]
+        tk2 = [_skinny_lfsr4(tk2[i]) if i < 8 else tk2[i] for i in range(16)]
+    return out
+
+
+def skinny_reference(plaintext, tweakey, rounds=SKINNY_ROUNDS):
+    state = _skinny_cells(plaintext)
+    for rtk in _skinny_round_tweakeys(tweakey, rounds):
+        state = [SKINNY_SBOX[v] for v in state]
+        k = _skinny_cells(rtk)
+        state = [state[i] ^ k[i] for i in range(16)]
+        state = [state[4 * (i // 4) + ((i % 4) - (i // 4)) % 4]
+                 for i in range(16)]
+        out = list(state)
+        for col in range(4):
+            column = [state[4 * r + col] for r in range(4)]
+            for r in range(4):
+                v = 0
+                for j in range(4):
+                    if SKINNY_MC[r][j]:
+                        v ^= column[j]
+                out[4 * r + col] = v
+        state = out
+    return _skinny_pack(state)
+
+
+SKINNY = {
+    "name": "skinny",
+    "parts": {"round": skinny_round},
+    "reference": skinny_reference,
+    "state": ["state"],
+    "block_bits": 64,
+    "key_bits": 128,
+    "rounds": SKINNY_ROUNDS,
+    "bit_order": "lsb",
+    # From the CRYPTO 2016 paper's test-vector appendix.
+    "vectors": [(0xCF16CFE8FD0F98AA,
+                 0x9EB93640D088DA6376A39D1C8BEA71E1,
+                 0x6CEDA1F43DE92B9E)],
+    "params": lambda i, key: {"rtk": _skinny_round_tweakeys(key)[i]},
+    "note": "MixColumns over a binary matrix, and a tweakey schedule that "
+            "is a cell permutation plus a 4-bit LFSR.",
+}
+
+
+REGISTRY = {c["name"]: c
+            for c in (PRESENT, LLBC, SPECK, GIFT, SIMON, SKINNY)}
 
 
 def claasp_kwargs(spec, rounds, outdir, key=0):
