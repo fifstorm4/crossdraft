@@ -684,9 +684,14 @@ def cmd_random(args):
         print()
         print("  NIST SP 800-22")
         try:
+            # CLAASP counts rounds from zero and treats the range as
+            # exclusive at the top, so asking for the last round alone --
+            # round_start = round_end = rounds - 1 -- selects nothing and
+            # the suite returns silently with no results at all. Ask for
+            # the whole range and read the last entry.
             nist(cipher, test_type=args.test_type,
                  bits_per_sequence=args.bits, sequences=args.sequences,
-                 round_start=rounds - 1, round_end=rounds - 1)
+                 round_start=0, round_end=rounds - 1)
         except RuntimeError as e:
             print(f"    {e}")
             return 1

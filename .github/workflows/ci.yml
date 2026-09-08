@@ -127,9 +127,53 @@ jobs:
           if ($out -notmatch "6 7 8 9") { throw "arguments were mangled on the way through" }
           "run.ps1 passes its arguments through intact"
 
+  analysis:
+    name: CLAASP-backed commands
+    needs: [crosscheck, launcher]
+    # Only on main. Building the image is the expensive part, and the
+    # commands below need a SAT solver, a logic minimiser and SageMath --
+    # none of which belongs in a check that has to pass before a pull
+    # request can be read.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Load into the local daemon rather than pushing: this job is a check,
+      # not a release. Layer caching keeps a rebuild to a few minutes once
+      # the dependency layers have settled.
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: crossdraft:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Known-answer, against figures from the literature rather than
+      # against this project's own previous output: PRESENT's ciphertexts
+      # and active S-box counts from CHES 2007, LLBC's Table VI.
+      - name: Analysis pipeline
+        run: |
+          # DIGITAL_JAR and BRIDGE_JAR are set inside the image, so the
+          # shell expands them there rather than here.
+          docker run --rm -v "$PWD:/work" \
+            --entrypoint sh crossdraft:ci -c \
+            'python3 /opt/crossdraft/tests/test_pipeline.py \
+               --digital-jar "$DIGITAL_JAR" --bridge-jar "$BRIDGE_JAR"' 
+
+      - name: Environment record
+        if: always()
+        run: |
+          docker run --rm -v "$PWD:/work" crossdraft:ci env llbc || true
+
   image:
     name: container image
-    needs: [crosscheck, launcher]
+    needs: [crosscheck, launcher, analysis]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

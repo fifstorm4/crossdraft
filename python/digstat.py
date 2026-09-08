@@ -297,9 +297,20 @@ def nist(cipher, test_type="avalanche", bits_per_sequence=131072,
             "that does."),
     }
     if verbose:
-        for i, r in enumerate(rounds):
-            print(f"  round {round_start + i}: {r['passed']}/{r['total']} "
-                  f"sub-tests passed ({r['rate']:.1%})")
+        if rounds:
+            for i, r in enumerate(rounds):
+                print(f"  round {round_start + i}: {r['passed']}/"
+                      f"{r['total']} sub-tests passed ({r['rate']:.1%})")
+        else:
+            # Silence here would read as a clean run. It is the opposite:
+            # assess produced nothing parseable, usually because its
+            # per-test output folders are missing, and the caveat below
+            # would then look like the whole story.
+            print("  no results came back from the test suite. `assess` ran "
+                  "but its report could not be parsed --")
+            print("  most often the per-test folders under "
+                  "experiments/AlgorithmTesting are missing.")
+            print("  python3 setup_nist.py recreates them.")
         print(f"  {bits_per_sequence:,} bits x {sequences} sequences, "
               f"{elapsed:.0f}s")
         print(f"  {out['caveat']}")
