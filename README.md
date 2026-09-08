@@ -163,7 +163,25 @@ rather than a month.
 ```
 
 serves a page on `127.0.0.1:8765`. The launcher publishes the port and
-changes the entrypoint; `run.ps1 gui` is the whole command. Digital is already the
+changes the entrypoint; `run.ps1 gui` is the whole command.
+
+Four tabs, because the CLI is already complete and what a browser adds is
+different: seeing what is possible without reading `--help`, changing a round
+count and running again, and reading a trail as a table rather than as a wall
+of log.
+
+| tab | what it does |
+|---|---|
+| **Pipeline** | build, verify, analyse — each greyed out until the one before it is green |
+| **Replicate** | pick a trail CSV, pin every round, check a published characteristic |
+| **S-boxes** | DDT, LAT and the maximum differential probability |
+| **Cost** | gate estimate under a stated model, and the published figures beside it |
+
+The trail table is parsed out of the command's own output rather than
+recomputed, so the numbers on screen and the numbers in a paper cannot drift
+apart. Export buttons write the same files the CLI writes — but anything
+meant for a paper should still go through the command line, where the command
+is the record of what was done. Digital is already the
 schematic editor, so this is not another one — it covers the part that
 otherwise lives in a terminal: pick a cipher, run the three stages, see which
 have passed.

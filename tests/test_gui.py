@@ -121,6 +121,46 @@ def main():
                   bool(r.get("svg")) and "<svg" in (r.get("svg") or ""),
                   f"  [{len(r.get('svg') or '')} bytes]")
 
+        # The trail table is parsed out of the command's own output rather
+        # than recomputed, so the numbers on screen and the numbers in a
+        # paper cannot drift apart. Check that the parse actually produced
+        # rows -- silently empty would look like a cipher with no trail.
+        if not a.skip_analyse:
+            r = post(base + "/api/run",
+                     {"cipher": a.cipher, "stage": "analyse",
+                      "rounds": a.rounds, "bitorder": "lsb"})
+            rows = r.get("trail") or []
+            check("parses the trail into a table",
+                  len(rows) == a.rounds and
+                  all("weight" in x and "active" in x for x in rows),
+                  f"  [{len(rows)} rounds]")
+
+        csvs = json.loads(get(base + "/api/csvs")[1])
+        check("lists trail files for replicate", isinstance(csvs, list),
+              f"  [{len(csvs)} found]")
+
+        # S-boxes and cost need no solver, so they are cheap to check and
+        # they cover the two tabs a user reaches for when a search is slow.
+        r = post(base + "/api/simple",
+                 {"cipher": a.cipher, "stage": "sbox"})
+        check("S-box tables", r.get("ok") and "DDT" in (r.get("log") or ""),
+              _tail(r))
+
+        r = post(base + "/api/simple",
+                 {"cipher": a.cipher, "stage": "cost", "rounds": "10",
+                  "model": "nangate45"})
+        check("cost estimate", r.get("ok") and "GE" in (r.get("log") or ""),
+              _tail(r))
+
+        r = post(base + "/api/simple", {"stage": "bench"})
+        check("published figures",
+              r.get("ok") and "source:" in (r.get("log") or ""), _tail(r))
+
+        # An unknown cipher must be refused rather than shelling out with it.
+        r = post(base + "/api/simple",
+                 {"cipher": "../etc/passwd", "stage": "sbox"})
+        check("refuses a cipher it does not know", not r.get("ok"))
+
         state = json.loads(get(base + "/api/ciphers")[1])[a.cipher]["state"]
         check("remembers which stages passed",
               state.get("build") and state.get("verify"),
