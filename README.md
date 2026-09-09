@@ -413,6 +413,11 @@ only a JDK, and is worth having on its own.
 
 ---
 
+New here? `QUICKSTART_ja.md` goes from a bare Windows machine to analysing a
+cipher of your own, click by click.
+
+---
+
 ## Install
 
 ### With Docker — recommended

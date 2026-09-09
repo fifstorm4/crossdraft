@@ -231,16 +231,23 @@ jobs:
       # The digest, not the tag, is what a paper should quote: a tag can be
       # moved, a digest cannot. Put it in the run summary so it survives
       # after the log scrolls away.
+      # Print the tags the metadata action actually produced, not the git
+      # ref. `type=semver,pattern={{version}}` strips the leading v, so a
+      # tag of v0.1.0 publishes 0.1.0 -- and a summary that echoes the ref
+      # tells the reader to pull something that does not exist.
       - name: Digest
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           {
             echo "## Image published"
             echo
             echo '```'
-            echo "docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
+            printf '%s\n' "$TAGS" | sed 's/^/docker pull /'
             echo '```'
             echo
-            echo "For a paper's methodology section, quote the digest:"
+            echo "For a paper's methodology section, pin the digest rather"
+            echo "than a tag -- a tag can be moved, a digest cannot:"
             echo
             echo '```'
             echo "ghcr.io/${{ github.repository }}@${{ steps.push.outputs.digest }}"

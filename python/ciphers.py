@@ -795,6 +795,60 @@ REGISTRY = {c["name"]: c
             for c in (PRESENT, LLBC, SPECK, GIFT, SIMON, SKINNY)}
 
 
+def _load_local_ciphers():
+    """
+    Pick up cipher definitions from the working directory.
+
+    Without this, a user of the published image is stuck with the six
+    examples: the container runs the image's copy of this file, so editing a
+    checkout changes nothing and the failure is silent -- the new cipher
+    simply never appears in `list`.
+
+    So a file named `mycipher.py` (or whatever CROSSDRAFT_CIPHERS names)
+    beside the circuits is imported and any dict in it that looks like a
+    cipher is registered. That also puts a user's own designs where they
+    belong: next to their results, not inside somebody else's toolchain, and
+    not lost when the image is updated.
+
+    A definition here overrides a built-in of the same name, which is how a
+    variant gets tried without touching the originals.
+    """
+    import importlib.util
+    import os
+
+    names = os.environ.get("CROSSDRAFT_CIPHERS", "mycipher.py").split(os.pathsep)
+    for name in names:
+        path = name if os.path.isabs(name) else os.path.join(os.getcwd(), name)
+        if not os.path.exists(path):
+            continue
+        spec = importlib.util.spec_from_file_location("_crossdraft_local",
+                                                      path)
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except Exception as e:
+            raise RuntimeError(
+                f"{path} could not be imported: {type(e).__name__}: {e}. "
+                f"It is loaded as ordinary Python, so a syntax error or a "
+                f"bad import stops everything here.") from e
+
+        found = 0
+        for value in vars(module).values():
+            if not isinstance(value, dict):
+                continue
+            if not {"name", "parts", "reference"} <= set(value):
+                continue
+            REGISTRY[value["name"]] = value
+            found += 1
+        if not found:
+            raise RuntimeError(
+                f"{path} defines no cipher. A cipher is a dict with at least "
+                f"'name', 'parts' and 'reference'; see ADD_A_CIPHER_ja.md.")
+
+
+_load_local_ciphers()
+
+
 def claasp_kwargs(spec, rounds, outdir, key=0):
     """
     The build_cipher arguments for one cipher, in one place.

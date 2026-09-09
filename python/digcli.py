@@ -454,14 +454,33 @@ def cmd_sbox(args):
     """DDT and LAT of a cipher's S-boxes -- the tables papers quote."""
     from digtrail import sbox_tables
     spec = _spec(args.cipher)
+    # Find the tables by reading them off the built circuit rather than by
+    # guessing at names in the source. A user's cipher lives in their own
+    # file with their own naming, and a rule like "a list called
+    # MYCIPHER_SBOX" only ever worked for the built-in six.
     tables = {}
-    for key, val in vars(__import__("ciphers")).items():
-        if key.startswith(spec["name"].upper()) and isinstance(val, list) \
-                and len(val) in (16, 256) and sorted(val) == list(
-                    range(len(val))):
-            tables[key] = val
+    out = _outdir(spec, args)
+    for part in spec["parts"]:
+        js = os.path.join(out, f"{spec['name']}_{part}.json")
+        if not os.path.exists(js):
+            continue
+        from dig2claasp import Netlist, sbox_table
+        for comp in Netlist(js).by_type("ROM"):
+            table = sbox_table(comp)
+            if not table:
+                continue
+            key = tuple(table)
+            if key not in {tuple(v) for v in tables.values()}:
+                label = comp["attrs"].get("Label") or "S"
+                name = f"{spec['name'].upper()}_{label.rstrip('0123456789')}"
+                while name in tables:
+                    name += "'"
+                tables[name] = table
+
     if not tables:
-        sys.exit(f"no S-box table found for {spec['name']} in ciphers.py")
+        sys.exit(f"no S-box found in {spec['name']}'s circuits. Run `build "
+                 f"{spec['name']}` first; a cipher with no lookup table -- "
+                 f"Speck and Simon, for instance -- has no DDT to show.")
     for name, table in tables.items():
         r = sbox_tables(table, name)
         print(f"{name}: {len(table)} entries, bijective={r['bijective']}, "
