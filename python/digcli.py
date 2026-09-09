@@ -70,6 +70,10 @@ def _env(args):
     return os.path.abspath(jar), os.path.abspath(bridge)
 
 
+class CipherError(SystemExit):
+    """A problem in a cipher definition, reported without a traceback."""
+
+
 def _spec(name):
     from ciphers import REGISTRY
     if name not in REGISTRY:
@@ -1166,6 +1170,15 @@ def main():
     args = ap.parse_args()
     if getattr(args, "bit_order", None):
         os.environ["DIGBRIDGE_BIT_ORDER"] = args.bit_order
+    # A broken mycipher.py is the user's file, not a fault in this
+    # toolchain, so report what is wrong and stop -- a traceback through
+    # ciphers.py points at the wrong source entirely.
+    try:
+        from ciphers import REGISTRY          # noqa: F401
+    except RuntimeError as e:
+        print(f"\n{e}\n", file=sys.stderr)
+        return 1
+
     return {"list": cmd_list, "doctor": cmd_doctor,
             "build": cmd_build, "verify": cmd_verify,
             "analyse": cmd_analyse, "sbox": cmd_sbox, "cluster": cmd_cluster,

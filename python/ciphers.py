@@ -795,6 +795,45 @@ REGISTRY = {c["name"]: c
             for c in (PRESENT, LLBC, SPECK, GIFT, SIMON, SKINNY)}
 
 
+#: What every cipher must state, and what a missing one costs.
+REQUIRED = {
+    "name": "the name used on the command line",
+    "parts": "{'round': function} -- the circuits to draw",
+    "reference": "reference(plaintext, key, rounds), in plain Python",
+    "state": "the looping variables, matching the circuit's In labels",
+    "block_bits": "block size",
+    "key_bits": "key size",
+    "rounds": "the full round count",
+    "params": "params(round, key) -> {input: value} for each round",
+}
+
+
+def _check_cipher(spec, where):
+    """
+    Reject an incomplete definition here, with the field named.
+
+    Every one of these is read somewhere later, and a missing one surfaces as
+    a KeyError from inside whichever command reached it first -- which points
+    at this toolchain's source rather than at the two lines the user has to
+    write.
+    """
+    missing = [k for k in REQUIRED if k not in spec]
+    if missing:
+        lines = [f"{where}: cipher {spec.get('name', '?')!r} is missing "
+                 f"{len(missing)} required field(s):"]
+        for k in missing:
+            lines.append(f"    {k:12s} {REQUIRED[k]}")
+        lines.append("See ADD_A_CIPHER_ja.md for a complete example.")
+        raise RuntimeError("\n".join(lines))
+
+    if not spec.get("parts"):
+        raise RuntimeError(
+            f"{where}: cipher {spec['name']!r} has no parts. At least "
+            f"{{'round': fn}} is needed -- that is the circuit to draw.")
+    if "vectors" not in spec:
+        spec["vectors"] = []
+
+
 def _load_local_ciphers():
     """
     Pick up cipher definitions from the working directory.
@@ -838,6 +877,7 @@ def _load_local_ciphers():
                 continue
             if not {"name", "parts", "reference"} <= set(value):
                 continue
+            _check_cipher(value, path)
             REGISTRY[value["name"]] = value
             found += 1
         if not found:
