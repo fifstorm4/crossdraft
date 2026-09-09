@@ -120,12 +120,14 @@ def cmd_list(args):
 
 def cmd_build(args):
     from digparts import Builder
+    from dig2claasp import Netlist, RoundSpec
     jar, bridge = _env(args)
     spec = _spec(args.cipher)
     out = _outdir(spec, args)
 
     order = (os.environ.get("DIGBRIDGE_BIT_ORDER")
              or spec.get("bit_order", "lsb"))
+    failures = []
     for part, fn in spec["parts"].items():
         b = Builder(bit_order=order)
         fn(b)
@@ -153,11 +155,35 @@ def cmd_build(args):
                     continue
             loose.append(u)
         print(f"  {part:8s} {len(data['components']):4d} components, "
-              f"{len(data['nets']):3d} nets" +
-              (f"  ** {len(loose)} UNCONNECTED PIN(S) **" if loose else ""))
-        for u in loose[:5]:
-            print(f"      {u['component']}.{u['pin']} at "
-                  f"({u['x']},{u['y']})")
+              f"{len(data['nets']):3d} nets")
+
+        # Report every problem the circuit has, here, rather than letting the
+        # next command hit whichever one it reaches first. A round circuit
+        # that builds and only fails at `verify` sends the reader looking at
+        # the wrong stage, and a warning printed beside a success line is a
+        # warning nobody acts on.
+        problems = []
+        for u in loose:
+            problems.append(
+                f"{u['component']}.{u['pin']} at ({u['x']},{u['y']}) is not "
+                f"wired. An unwired pin is invisible in the .dig file and is "
+                f"the most common circuit mistake.")
+        try:
+            RoundSpec(Netlist(js))
+        except ValueError as e:
+            problems.append(str(e))
+
+        if problems:
+            print()
+            print(f"  {part}: this circuit is not usable yet")
+            for line in problems:
+                print(f"    {line}")
+            failures.append(part)
+    if failures:
+        print()
+        print(f"  {len(failures)} circuit(s) need fixing before `verify` "
+              f"can run: {', '.join(failures)}")
+        return 1
     print(f"  -> {out}")
     return 0
 

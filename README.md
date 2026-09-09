@@ -284,6 +284,9 @@ circuit with its own state, iterated in step.
 
 ## Writing a cipher
 
+`ADD_A_CIPHER_ja.md` walks through this in Japanese, with the failure modes
+and what each one means.
+
 Circuits are composed from parts, not coordinates:
 
 ```python
@@ -414,11 +417,16 @@ only a JDK, and is worth having on its own.
 
 ### With Docker — recommended
 
-```sh
-./run.sh selftest
-./run.sh build present
-./run.sh analyse present --rounds 3 --export fig.svg
+```powershell
+$env:IMAGE = "ghcr.io/fifstorm4/crossdraft:0.1.0"
+.\run.ps1 selftest
+.\run.ps1 build present
+.\run.ps1 analyse present --rounds 3 --export fig.svg
 ```
+
+With `IMAGE` set to a published release the launcher pulls it — about two
+minutes. Without it, or if the pull fails, it builds locally, which is twenty
+to forty because most of that time is fetching SageMath.
 
 Files land in the directory you ran it from. The first call builds the image;
 after that it starts in a second.
@@ -438,10 +446,12 @@ STS 2.1.2 and Digital itself. The build fails rather than ship an image whose
 analysis path is broken: it runs PRESENT and checks the ciphertext against the
 CHES 2007 vector.
 
-For a paper, pin the release and quote the digest:
+For a paper, pin the digest rather than the tag — a tag can be moved, a
+digest cannot. Every release prints its digest in the workflow summary:
 
-```sh
-IMAGE=ghcr.io/fifstorm/crossdraft:0.1.0 ./run.sh env present
+```powershell
+$env:IMAGE = "ghcr.io/fifstorm4/crossdraft@sha256:..."
+.\run.ps1 env present
 ```
 
 ### Without Docker

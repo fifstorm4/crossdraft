@@ -11,7 +11,7 @@
   Files land in the directory you ran this from, not inside the container.
   Pin a release with the IMAGE environment variable:
 
-    $env:IMAGE = "ghcr.io/fifstorm/crossdraft:0.1.0"
+    $env:IMAGE = "ghcr.io/fifstorm4/crossdraft:0.1.0"
     .\run.ps1 env present
 #>
 
@@ -33,10 +33,22 @@ try { Unblock-File -Path $PSCommandPath -ErrorAction SilentlyContinue } catch {}
 $exists = docker images -q $image 2>$null
 
 if (-not $exists) {
+    # A published image is a two-minute pull; building locally is twenty to
+    # forty, most of it fetching SageMath. Try the registry first and fall
+    # back to building, so a fresh machine does not pay for a build nobody
+    # needed.
+    if ($image -like "ghcr.io/*") {
+        Write-Host "pulling $image" -ForegroundColor Yellow
+        docker pull $image
+        if ($LASTEXITCODE -eq 0) { $exists = docker images -q $image 2>$null }
+    }
+}
+
+if (-not $exists) {
     Write-Host "building $image (once; SageMath makes this slow, allow 20-40 min)" -ForegroundColor Yellow
     docker build -t $image $PSScriptRoot
     if ($LASTEXITCODE -ne 0) { throw "build failed" }
-} else {
+} elseif ($image -notlike "ghcr.io/*") {
     # The container runs the image's copy of the code, not the checkout's.
     # Unpacking a new tarball therefore changes nothing until the image is
     # rebuilt, and the symptom is the CLI rejecting a command it should have
