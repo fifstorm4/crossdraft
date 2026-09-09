@@ -2,13 +2,18 @@ cff-version: 1.2.0
 title: >-
   CrossDraft: draw a cipher once, check it twice
 message: >-
-  If you use this software in research, please cite it. Replace the
-  placeholder author with your own details before making the repository
-  public; the DOI is assigned by Zenodo on the first public release.
+  If you use this software in your research, please cite it as below.
 type: software
+# TODO before a public release: replace with real details.
+#   - family-names: ...
+#     given-names: ...
+#     orcid: "https://orcid.org/0000-0000-0000-0000"
+#     affiliation: ...
+# A DOI is assigned automatically once the repository is linked to Zenodo
+# and a release is tagged; add it here as `doi:` when it exists.
 authors:
   - name: The CrossDraft Authors
-repository-code: "https://github.com/fifstorm/crossdraft"
+repository-code: "https://github.com/fifstorm4/crossdraft"
 abstract: >-
   CrossDraft connects Digital, a schematic-capture logic simulator, to
   CLAASP, a library for automated cryptanalysis. A block cipher is drawn

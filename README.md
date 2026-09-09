@@ -381,43 +381,6 @@ them against.
 
 ---
 
-## When something does not work
-
-```sh
-./run.ps1 doctor
-```
-
-Asks every question the pipeline depends on and says what to do about each
-answer:
-
-```
-  ok       java                     openjdk version "21.0.12"
-  MISSING  Digital.jar              DIGITAL_JAR is not set
-          needed for: build, verify
-          fix: point it at Digital.jar from github.com/hneemann/Digital/releases/latest
-  ok       CLAASP                   importable
-  MISSING  kissat                   not on PATH
-          needed for: analyse, replicate, cluster
-          fix: build it from github.com/arminbiere/kissat. CaDiCaL will not
-               substitute: CLAASP parses statistics it does not print
-```
-
-Every failure this project hit on somebody else's machine took a round trip to
-report, reproduce and explain — a dependency CLAASP does not declare, a server
-bound to a loopback address a container cannot reach, a port held by something
-invisible. None said what was wrong and none could be guessed from the
-symptom. `doctor` asks directly.
-
-It also distinguishes the two halves: drawing and verifying circuits needs
-only a JDK, and is worth having on its own.
-
----
-
-New here? `QUICKSTART_ja.md` goes from a bare Windows machine to analysing a
-cipher of your own, click by click.
-
----
-
 ## Install
 
 ### With Docker — recommended
@@ -863,3 +826,43 @@ every time.
 - **Sequential circuits are out of scope** by design.
 - `Circuit.write()` shells out to `java` twice per circuit, to ask Digital
   where the pins landed before drawing wires to them.
+
+
+---
+
+## When something does not work
+
+```sh
+./run.ps1 doctor
+```
+
+Asks every question the pipeline depends on and says what to do about each
+answer:
+
+```
+  ok       java                     openjdk version "21.0.12"
+  MISSING  Digital.jar              DIGITAL_JAR is not set
+          needed for: build, verify
+          fix: point it at Digital.jar from github.com/hneemann/Digital/releases/latest
+  ok       CLAASP                   importable
+  MISSING  kissat                   not on PATH
+          needed for: analyse, replicate, cluster
+          fix: build it from github.com/arminbiere/kissat. CaDiCaL will not
+               substitute: CLAASP parses statistics it does not print
+```
+
+Every failure this project hit on somebody else's machine took a round trip to
+report, reproduce and explain — a dependency CLAASP does not declare, a server
+bound to a loopback address a container cannot reach, a port held by something
+invisible. None said what was wrong and none could be guessed from the
+symptom. `doctor` asks directly.
+
+It also distinguishes the two halves: drawing and verifying circuits needs
+only a JDK, and is worth having on its own.
+
+---
+
+New here? `QUICKSTART_ja.md` goes from a bare Windows machine to analysing a
+cipher of your own, click by click.
+
+---

@@ -822,6 +822,7 @@ def cmd_env(args):
 #: protects nothing: `--quick` has to stay short enough to run before every
 #: commit, and the NIST battery is far too slow for that.
 SUITES = [
+    ("reference implementations vs published vectors", None, "offline", []),
     ("cross-validation against Digital", "test_all.py", "quick", []),
     ("PRESENT against CLAASP's own model", "test_present_reference.py",
      "normal", []),
@@ -836,6 +837,45 @@ SUITES = [
 ]
 
 
+def _offline_vectors(quiet=False):
+    """
+    Check every reference implementation against its published vectors.
+
+    Needs nothing installed -- no Java, no SageMath, no solver -- because it
+    only calls plain Python. Worth having as its own level: a new user can
+    run it the moment they have the files, before spending twenty minutes
+    on a container, and see that the cipher definitions are sound.
+
+    It checks the first link of the chain only. That the *circuits* agree
+    with these references is what the other suites are for.
+    """
+    import time
+
+    from ciphers import REGISTRY
+
+    t0 = time.time()
+    ok = True
+    parts = []
+    for name, spec in sorted(REGISTRY.items()):
+        vectors = spec.get("vectors") or []
+        if not vectors:
+            parts.append(f"{name} --")
+            continue
+        good = 0
+        for pt, key, expected in vectors:
+            try:
+                if spec["reference"](pt, key, spec["rounds"]) == expected:
+                    good += 1
+            except Exception:
+                pass
+        parts.append(f"{name} {good}/{len(vectors)}")
+        if good != len(vectors):
+            ok = False
+    if not quiet:
+        print("        " + "   ".join(parts))
+    return ok, time.time() - t0
+
+
 def cmd_selftest(args):
     """
     Run the suites and say plainly whether this installation is sound.
@@ -848,14 +888,22 @@ def cmd_selftest(args):
     import subprocess
     import time
 
-    jar, bridge = _env(args)
-    levels = {"quick": 1, "normal": 2, "full": 3}
+    if args.level != "offline":
+        jar, bridge = _env(args)
+    else:
+        jar = bridge = ""
+    levels = {"offline": 0, "quick": 1, "normal": 2, "full": 3}
     want = levels[args.level]
     tests = os.path.join(HERE, "..", "tests")
 
     results, t0 = [], time.time()
     for label, script, level, extra in SUITES:
         if levels[level] > want:
+            continue
+        if script is None:
+            ok, dt = _offline_vectors(args.quiet)
+            results.append((label, ok, dt, ""))
+            print(f"  {'PASS' if ok else 'FAIL'}  {label}  [{dt:.1f}s]")
             continue
         path = os.path.join(tests, script)
         if not os.path.exists(path):
@@ -1135,8 +1183,11 @@ def main():
     p = sub.add_parser("selftest",
                        help="does this installation reproduce the reference "
                             "results?")
-    p.add_argument("--level", choices=("quick", "normal", "full"),
-                   default="normal")
+    p.add_argument("--level",
+                   choices=("offline", "quick", "normal", "full"),
+                   default="normal",
+                   help="offline needs neither Java nor CLAASP and takes "
+                        "a second")
     p.add_argument("--quiet", action="store_true")
 
     p = sub.add_parser("replicate",

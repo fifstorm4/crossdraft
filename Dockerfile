@@ -26,7 +26,7 @@
 # ---------------
 # Tag each release and quote the digest in the paper:
 #
-#   docker run ghcr.io/fifstorm/crossdraft:0.1.0@sha256:...
+#   docker run ghcr.io/fifstorm4/crossdraft:0.1.0@sha256:...
 #
 # `cdraft env` inside the container prints every version it found, plus a
 # SHA-256 of each circuit analysed. That pair -- image digest and circuit
@@ -37,7 +37,11 @@ FROM ubuntu:24.04
 LABEL org.opencontainers.image.title="CrossDraft"
 LABEL org.opencontainers.image.description="Draw a cipher once in Digital; \
 check it against its test vectors and analyse it with CLAASP."
-LABEL org.opencontainers.image.source="https://github.com/fifstorm/crossdraft"
+# GHCR reads this label to attach the package to a repository, so a typo
+# here silently detaches the published image from the project. The CI passes
+# the real value; the default is only for a local build.
+ARG REPO=fifstorm4/crossdraft
+LABEL org.opencontainers.image.source="https://github.com/${REPO}"
 LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 ENV DEBIAN_FRONTEND=noninteractive \

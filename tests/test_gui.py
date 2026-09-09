@@ -161,6 +161,37 @@ def main():
                  {"cipher": "../etc/passwd", "stage": "sbox"})
         check("refuses a cipher it does not know", not r.get("ok"))
 
+        # The Host check is what stops a page the user happens to have open
+        # from driving this server: a form-encoded POST is a simple request
+        # and reaches 127.0.0.1 without a preflight.
+        import urllib.request as _u
+        req = _u.Request(base + "/api/ciphers",
+                         headers={"Host": "evil.example.com"})
+        code = None
+        try:
+            with _u.urlopen(req, timeout=5) as r:
+                code = r.status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        except OSError:
+            code = "refused"
+        check("refuses a request with a foreign Host header", code == 403,
+              f"  [{code}]")
+
+        # `fmt` reaches a filename, so an unchecked one writes outside the
+        # working directory. It must fall back to the default instead.
+        r = post(base + "/api/export",
+                 {"cipher": a.cipher, "kind": "analyse",
+                  "fmt": "svg/../../../tmp/escape.svg", "rounds": 2})
+        check("an export format containing a path is refused or ignored",
+              not os.path.exists("/tmp/escape.svg"),
+              f"  [wrote {r.get('file')}]")
+
+        r = post(base + "/api/replicate",
+                 {"cipher": a.cipher, "trail": "/etc/passwd", "rounds": 2})
+        check("a trail outside the working directory is refused",
+              not r.get("ok") and "usable trail" in (r.get("log") or ""))
+
         state = json.loads(get(base + "/api/ciphers")[1])[a.cipher]["state"]
         check("remembers which stages passed",
               state.get("build") and state.get("verify"),

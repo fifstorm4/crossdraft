@@ -36,10 +36,52 @@ sys.path.insert(0, HERE)
 STATE = {}
 LOCK = threading.Lock()
 
+#: Everything a form may name, and nothing else.
+EXPORT_FORMATS = ("svg", "pdf", "png", "jpg", "tex", "tikz", "csv",
+                  "json", "md", "txt")
+EXPORT_KINDS = ("analyse", "replicate")
+COST_MODELS = ("nangate45", "umc180", "nand_transistors")
+BIT_ORDERS = ("lsb", "msb")
+
+
+def _int(form, key, default, lo, hi):
+    """An integer from a form, clamped. Never raises."""
+    try:
+        v = int(form.get(key, default))
+    except (TypeError, ValueError):
+        return int(default)
+    return max(lo, min(hi, v))
+
+
+def _choice(form, key, allowed, default):
+    """One of a fixed set, or the default."""
+    v = form.get(key, default)
+    return v if v in allowed else default
+
+
+def _under(path, *roots):
+    """
+    The path, if it is inside one of `roots`; otherwise None.
+
+    A form field that reaches the filesystem needs this. Without it `fmt`
+    alone is enough to write outside the working directory -- "svg/../../x"
+    is a perfectly good string -- and the export button becomes a way for
+    any page the user has open to drop a file anywhere the container can
+    write.
+    """
+    if not path:
+        return None
+    real = os.path.realpath(path)
+    for root in roots:
+        base = os.path.realpath(root)
+        if real == base or real.startswith(base + os.sep):
+            return real
+    return None
+
 
 # --------------------------------------------------------------------------
 
-def run_cli(*args, timeout=None):
+def run_cli(*args, timeout=None, env=None):
     """
     Run one CLI command as a subprocess and return (ok, output).
 
@@ -51,8 +93,11 @@ def run_cli(*args, timeout=None):
     cmd = [sys.executable, os.path.join(HERE, "digcli.py")] + [str(a)
                                                                for a in args]
     try:
+        environment = dict(os.environ)
+        if env:
+            environment.update(env)
         r = subprocess.run(
-            cmd, capture_output=True, text=True, env=dict(os.environ),
+            cmd, capture_output=True, text=True, env=environment,
             timeout=timeout or int(os.environ.get("DIGGUI_TIMEOUT", "3600")))
         return r.returncode == 0, (r.stdout or "") + (r.stderr or "")
     except subprocess.TimeoutExpired:
@@ -60,10 +105,18 @@ def run_cli(*args, timeout=None):
                        "no useful bound on running time; reduce the round "
                        "count or raise DIGGUI_TIMEOUT.")
     except Exception:
-        return False, traceback.format_exc()
+        # Same rule as the request handler: the trace goes to the terminal,
+        # the browser gets a sentence. A page that should not be talking to
+        # this server does not need to learn the filesystem layout.
+        detail = traceback.format_exc()
+        print(detail, file=sys.stderr)
+        return False, (f"could not run the command: "
+                       f"{detail.strip().splitlines()[-1]}\n"
+                       f"The full traceback is in the terminal running the "
+                       f"GUI.")
 
 
-def run_stage(cipher, stage, **kw):
+def run_stage(cipher, stage, env=None, **kw):
     args = [stage, cipher]
     for k, v in kw.items():
         if v is None or v is False:
@@ -72,7 +125,7 @@ def run_stage(cipher, stage, **kw):
         args.append(flag)
         if v is not True:
             args.append(v)
-    ok, log = run_cli(*args)
+    ok, log = run_cli(*args, env=env)
     with LOCK:
         STATE.setdefault(cipher, {})[stage] = {"ok": ok, "log": log}
     return ok, log
@@ -477,6 +530,27 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _host_ok(self):
+        """
+        Refuse requests that did not come from this machine's own address.
+
+        A form-encoded POST is a "simple request", so a browser sends it
+        without a preflight and without asking. Any page the user happens to
+        have open can therefore post to 127.0.0.1:8765, and a name that
+        resolves to 127.0.0.1 defeats the port binding. The Host header is
+        what distinguishes the two, since a rebinding attack cannot forge it
+        and keep the browser pointed at the right socket.
+        """
+        port = self.server.server_address[1]
+        host = self.headers.get("Host", "")
+        return host in {f"127.0.0.1:{port}", f"localhost:{port}",
+                        f"[::1]:{port}"}
+
+    def _reject_host(self):
+        self._send(403, json.dumps({
+            "error": "requests must come from 127.0.0.1 or localhost",
+            "host": self.headers.get("Host", "")}))
+
     def _send(self, code, body, ctype="application/json"):
         data = body.encode()
         self.send_response(code)
@@ -493,6 +567,8 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------------------------------------------------------- GET
 
     def do_GET(self):
+        if not self._host_ok():
+            return self._reject_host()
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
             return self._send(200, PAGE, "text/html")
@@ -518,6 +594,8 @@ class Handler(BaseHTTPRequestHandler):
     # --------------------------------------------------------------- POST
 
     def do_POST(self):
+        if not self._host_ok():
+            return self._reject_host()
         path = urlparse(self.path).path
         form = self._form()
         try:
@@ -530,8 +608,18 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/export":
                 return self._send(200, json.dumps(self._export(form)))
         except Exception:
+            # Log the traceback where the operator can see it; send the
+            # browser a summary. A stack trace in an HTTP response tells a
+            # page that should not be talking to this server what the
+            # filesystem looks like.
+            detail = traceback.format_exc()
+            print(detail, file=sys.stderr)
+            last = detail.strip().splitlines()[-1]
             return self._send(200, json.dumps(
-                {"ok": False, "log": traceback.format_exc()}))
+                {"ok": False,
+                 "log": f"the command failed: {last}\n"
+                        f"The full traceback is in the terminal running "
+                        f"the GUI."}))
         return self._send(404, json.dumps({"error": "not found"}))
 
     # ------------------------------------------------------------ actions
@@ -539,14 +627,18 @@ class Handler(BaseHTTPRequestHandler):
     def _run(self, form):
         cipher = form.get("cipher", "")
         stage = form.get("stage", "")
-        rounds = int(form.get("rounds", "3"))
-        order = form.get("bitorder", "lsb")
+        rounds = _int(form, "rounds", 3, 1, 64)
+        order = _choice(form, "bitorder", BIT_ORDERS, "lsb")
         if cipher not in cipher_list():
             return {"ok": False, "log": "unknown cipher"}
         if stage not in ("build", "verify", "analyse"):
             return {"ok": False, "log": "unknown stage"}
 
-        os.environ["DIGBRIDGE_BIT_ORDER"] = order
+        # Per-subprocess, not per-server. Writing os.environ here would let
+        # two requests on this threading server overwrite each other's bit
+        # order, and the loser would get a working circuit computing the
+        # mirror-image function.
+        env = {"DIGBRIDGE_BIT_ORDER": order}
         if stage == "build":
             kw = {"bit_order": order}
         elif stage == "verify":
@@ -556,7 +648,7 @@ class Handler(BaseHTTPRequestHandler):
             os.makedirs(os.path.dirname(svg), exist_ok=True)
             kw = {"rounds": rounds, "show": True, "export": svg}
 
-        ok, log = run_stage(cipher, stage, **kw)
+        ok, log = run_stage(cipher, stage, env=env, **kw)
         body = {"ok": ok, "log": log}
         if stage == "analyse":
             body["trail"] = parse_trail(log)
@@ -570,20 +662,29 @@ class Handler(BaseHTTPRequestHandler):
         trail = form.get("trail", "")
         if cipher not in cipher_list():
             return {"ok": False, "log": "unknown cipher"}
+        # The trail comes from a form field, so it has to be confined:
+        # the working directory the user mounted, or the bundled examples.
+        examples = os.path.join(HERE, "..", "examples")
+        trail = _under(trail, os.getcwd(), examples)
         if not trail or not os.path.exists(trail):
             return {"ok": False,
-                    "log": "no trail file selected. A CSV with a `round` "
+                    "log": "no usable trail file. It must be a CSV in this "
+                           "directory (or in examples/), with a `round` "
                            "column and one `delta_*` column per state "
-                           "variable, in hex, in this directory."}
+                           "variable, in hex."}
         svg = os.path.join(os.getcwd(), "build", cipher, "replicate.svg")
         os.makedirs(os.path.dirname(svg), exist_ok=True)
         args = ["replicate", cipher, "--trail", trail,
-                "--rounds", form.get("rounds", "7"), "--show",
+                "--rounds", str(_int(form, "rounds", 7, 1, 64)), "--show",
                 "--export", svg]
         if form.get("pin"):
             args.append("--pin-all")
-        if form.get("weight"):
-            args += ["--expect-weight", form["weight"]]
+        try:
+            weight = float(form["weight"]) if form.get("weight") else None
+        except (TypeError, ValueError):
+            weight = None
+        if weight is not None and 0 <= weight <= 4096:
+            args += ["--expect-weight", str(weight)]
         ok, log = run_cli(*args)
         body = {"ok": ok, "log": log, "trail": parse_trail(log)}
         if os.path.exists(svg):
@@ -603,23 +704,37 @@ class Handler(BaseHTTPRequestHandler):
         if stage == "cost":
             return dict(zip(("ok", "log"),
                             run_cli("cost", cipher,
-                                    "--rounds", form.get("rounds", "20"),
+                                    "--rounds",
+                                    str(_int(form, "rounds", 20, 1, 256)),
                                     "--model",
-                                    form.get("model", "nangate45"))))
+                                    _choice(form, "model", COST_MODELS,
+                                            "nangate45"))))
         return {"ok": False, "log": "unknown action"}
 
     def _export(self, form):
         cipher = form.get("cipher", "")
-        kind = form.get("kind", "analyse")
-        fmt = form.get("fmt", "svg")
+        kind = _choice(form, "kind", EXPORT_KINDS, "analyse")
+        fmt = _choice(form, "fmt", EXPORT_FORMATS, "svg")
         if cipher not in cipher_list():
             return {"ok": False, "log": "unknown cipher"}
+
+        # `fmt` reaches a filename, so it is taken from a fixed list rather
+        # than from the form. Left open, "svg/../../x" would write outside
+        # the working directory entirely.
         name = f"{cipher}_{kind}.{fmt}"
-        target = os.path.join(os.getcwd(), name)
-        args = [kind, cipher, "--rounds", form.get("rounds", "3"),
-                "--export", target]
+        target = _under(os.path.join(os.getcwd(), name), os.getcwd())
+        if not target:
+            return {"ok": False, "log": "refusing to write outside the "
+                                        "working directory"}
+
+        args = [kind, cipher, "--rounds",
+                str(_int(form, "rounds", 3, 1, 64)), "--export", target]
         if kind == "replicate":
-            args += ["--trail", form.get("trail", "")]
+            examples = os.path.join(HERE, "..", "examples")
+            trail = _under(form.get("trail", ""), os.getcwd(), examples)
+            if not trail:
+                return {"ok": False, "log": "no usable trail file"}
+            args += ["--trail", trail]
             if form.get("pin"):
                 args.append("--pin-all")
         ok, log = run_cli(*args)

@@ -94,7 +94,10 @@ if ($args.Count -gt 0 -and $args[0] -eq "gui") {
 
     Write-Host "CrossDraft GUI: open http://127.0.0.1:$port" -ForegroundColor Green
     Write-Host "ctrl-c to stop" -ForegroundColor DarkGray
-    docker run --rm -it -p "${port}:${port}" -e "DIGGUI_PORT=$port" `
+    # Publish on loopback only. The server binds 0.0.0.0 because inside a
+    # container that is the only address the port forward can reach, but the
+    # forward itself has no reason to accept from the network.
+    docker run --rm -it -p "127.0.0.1:${port}:${port}" -e "DIGGUI_PORT=$port" `
         -v "${PWD}:/work" --entrypoint python3 $image `
         /opt/crossdraft/python/diggui.py
     if ($LASTEXITCODE -ne 0) {

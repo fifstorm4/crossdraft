@@ -27,15 +27,18 @@ analysis = ["claasp"]          # also needs SageMath, kissat, espresso
 figures = ["matplotlib"]       # only for .pdf/.png/.jpg export
 
 [project.urls]
-Homepage = "https://github.com/fifstorm/crossdraft"
-Issues = "https://github.com/fifstorm/crossdraft/issues"
+Homepage = "https://github.com/fifstorm4/crossdraft"
+Issues = "https://github.com/fifstorm4/crossdraft/issues"
 
-[project.scripts]
-cdraft = "crossdraft.cli:main"
-
-[build-system]
-requires = ["setuptools>=64"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-package-dir = {"crossdraft" = "python"}
+# No [project.scripts] and no [tool.setuptools]: this is metadata, not an
+# installable package. The modules import each other flatly (`from javacp
+# import classpath`), there is no python/__init__.py, and `pip install .`
+# would produce something that imports but does not run.
+#
+# Run it in place instead:
+#
+#     python3 python/digcli.py build present
+#
+# or through Docker, which is what the launchers do. Packaging would buy
+# `pip install -e .` and nothing else; git clone and a container already
+# cover every way this is actually used.
