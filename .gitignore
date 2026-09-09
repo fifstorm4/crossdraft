@@ -31,3 +31,7 @@ __pycache__/
 # Distribution archives
 *.tar.gz
 *.zip
+
+# The verification record lives beside the circuits it describes, and both
+# are generated.
+.verified.json

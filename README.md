@@ -64,6 +64,66 @@ circuit ever comes out wrong.
 
 ---
 
+## What a weight is, and is not
+
+`analyse` reports a **characteristic** weight. Four things stand between that
+number and a statement about the cipher, and none of them is visible in the
+number itself.
+
+**It is a characteristic, not a differential.** The weight is the cost of one
+path. An attack is governed by the differential — the sum over every path
+joining the same two differences — which can only be cheaper. `cluster` sums
+them. The gap is free probability, and near a bound it decides whether a
+result is an attack or a boundary case.
+
+**The probability assumes the rounds are independent.** Multiplying the
+per-round transition probabilities is the Markov assumption. The difference
+*propagation* here is exact, because the key schedule is drawn as a circuit
+rather than approximated by independent round keys — but the multiplication
+still rests on the assumption.
+
+**It is an average over keys, not a probability for yours.** The hypothesis of
+stochastic equivalence says the two are close. For lightweight ciphers with
+weak key schedules there are published counterexamples.
+
+**Not finding something is not the same as it not being there.** SAT and CP
+are decision procedures with no useful bound on running time. Only
+`impossible` and `--linear` make the stronger claim, and only because
+UNSATISFIABLE is a proof rather than a failure to find.
+
+`analyse` says the first two of these in its own output. The other two are
+here.
+
+---
+
+## Nothing analyses an unverified circuit
+
+`analyse`, `cluster`, `replicate`, `impossible` and `bound` refuse to run on a
+circuit that has not passed `verify`:
+
+```
+  present has not passed `verify`.
+
+    python3 digcli.py verify present
+
+  A model built from a mistranslated circuit still produces plausible trails,
+  and nothing in them looks wrong.
+```
+
+This is the project's whole argument turned into a mechanism instead of a
+convention. `verify` writes `build/<cipher>/.verified.json` holding a SHA-256
+of every netlist, a digest of the reference implementation's source, and the
+round count checked. The analysis commands compare against it, so redrawing
+the circuit invalidates the record — and so does rewriting the reference the
+circuit was checked against, which leaves the circuit untouched while changing
+what agreeing with it means.
+
+`--unverified` proceeds anyway, and says what that costs. Analysing a design
+that has no reference implementation yet is legitimate; it just has to be
+asked for.
+
+---
+
 ## Three commands that exist for papers, not for convenience
 
 ### `selftest` — is this installation sound?

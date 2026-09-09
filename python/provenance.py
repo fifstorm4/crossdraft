@@ -161,12 +161,40 @@ def circuit_digests(outdir, cipher=None):
     return out
 
 
+def verification(outdir):
+    """
+    Whether these circuits passed `verify`, and against what.
+
+    A provenance record that says which solver ran but not whether the
+    circuit was ever checked is half a record. The digests are already here;
+    the missing half is the claim they were taken in support of.
+    """
+    import json
+    path = os.path.join(outdir or "", ".verified.json")
+    if not outdir or not os.path.exists(path):
+        return {"verified": False,
+                "note": "these circuits have not passed `verify`"}
+    try:
+        record = json.load(open(path))
+    except (OSError, ValueError):
+        return {"verified": False, "note": "the verification record is "
+                                           "unreadable"}
+    return {
+        "verified": True,
+        "vectors": record.get("vectors"),
+        "rounds_checked": record.get("rounds_checked"),
+        "reference_sha256": (record.get("reference") or "")[:16],
+        "when": record.get("timestamp"),
+    }
+
+
 def report(outdir=None, cipher=None, digital_jar=None, analysis=None):
     """The whole record, as a plain dict."""
     return {
         "crossdraft": CROSSDRAFT_VERSION,
         "tools": tool_versions(digital_jar),
         "circuits": circuit_digests(outdir, cipher),
+        "verification": verification(outdir),
         "analysis": analysis or {},
     }
 
@@ -200,6 +228,18 @@ def text(rep):
                      if "components" in c else "")
             lines.append(f"  {c['file']:<{w}}sha256:{c['sha256'][:16]}"
                          f"…{extra}")
+
+    v = rep.get("verification") or {}
+    if v.get("verified"):
+        lines += ["", "verification",
+                  f"  published vectors   {v.get('vectors')}",
+                  f"  circuit vs reference to round "
+                  f"{v.get('rounds_checked')}",
+                  f"  reference sha256    {v.get('reference_sha256')}…",
+                  f"  checked at          {v.get('when')}"]
+    elif rep["circuits"]:
+        lines += ["", "verification",
+                  f"  NOT VERIFIED -- {v.get('note')}"]
 
     if rep.get("analysis"):
         lines += ["", "analysis"]

@@ -48,6 +48,7 @@ import argparse
 import importlib
 import re
 import json
+import math
 import os
 import random
 import subprocess
@@ -283,9 +284,13 @@ def cmd_verify(args):
                       f"got {got:x} want {c:x}")
         print(f"  published vectors: "
               f"{len(spec['vectors']) - bad}/{len(spec['vectors'])}")
+        vectors_result = f"{len(spec['vectors']) - bad}/{len(spec['vectors'])}"
+        vector_failures = bad
     else:
         print("  published vectors: none "
               f"({spec.get('note', 'not available')})")
+        vectors_result = "none"
+        vector_failures = 0
 
     # 2. the reference pins down the circuit
     def run(pt, key, n):
@@ -356,7 +361,13 @@ def cmd_verify(args):
                       f"    want {want:0{spec['block_bits']//4}x}")
     print(f"  circuit vs reference at {rounds} rounds: "
           f"{args.trials - bad}/{args.trials}")
-    return 1 if bad else 0
+
+    if bad or vector_failures:
+        return 1
+
+    # Record what passed, so `analyse` can refuse a circuit that has not.
+    _record_verified(spec, out, rounds, vectors_result)
+    return 0
 
 
 def cmd_analyse(args):
@@ -374,6 +385,7 @@ def cmd_analyse(args):
     # key_extra, final_key -- and a second copy of that assembly is a second
     # chance to name one the cipher does not have. PRESENT uses key_extra
     # and no key_map, and this is exactly where that crashed.
+    _require_verified(spec, out, rounds, args)
     cipher = _load_cipher(spec, out, rounds)
     print(f"  CLAASP cipher: {rounds} rounds, "
           f"{len(cipher.get_all_components_ids())} components")
@@ -425,8 +437,24 @@ def cmd_analyse(args):
         return 2
     w = trail["total_weight"]
     print(f"  best differential characteristic over {rounds} rounds: "
-          f"weight {w}  (probability 2^-{w})")
-    print(f"  active S-boxes at most: {int(w // 2)}")
+          f"weight {w}")
+    print(f"    characteristic probability 2^-{w}, assuming the rounds are "
+          f"independent")
+    print(f"    (the Markov assumption). The differential joining these two "
+          f"differences may be")
+    print(f"    stronger: `cluster {spec['name']} --rounds {rounds}` sums "
+          f"every characteristic")
+    print(f"    that shares its endpoints.")
+    # The divisor is the cheapest a single active S-box can be, read off
+    # the tables actually in the circuit. Two is right for PRESENT and
+    # SKINNY and wrong elsewhere: GIFT's best transition is 6/16, and Speck
+    # and Simon have no S-box at all -- for those the line is not merely
+    # inaccurate, it counts something the cipher does not contain.
+    tables = _sboxes_of(spec, _outdir(spec, args))
+    if tables:
+        per = min(-math.log2(_max_ddt(t) / len(t)) for t in tables.values())
+        print(f"  active S-boxes at most: {int(w // per)}  "
+              f"(at least weight {per:.2f} each)")
 
     if args.show or args.export:
         from digtrail import Trail
@@ -454,32 +482,51 @@ def cmd_analyse(args):
     return 0
 
 
-def cmd_sbox(args):
-    """DDT and LAT of a cipher's S-boxes -- the tables papers quote."""
-    from digtrail import sbox_tables
-    spec = _spec(args.cipher)
-    # Find the tables by reading them off the built circuit rather than by
-    # guessing at names in the source. A user's cipher lives in their own
-    # file with their own naming, and a rule like "a list called
-    # MYCIPHER_SBOX" only ever worked for the built-in six.
-    tables = {}
-    out = _outdir(spec, args)
+def _sboxes_of(spec, out):
+    """
+    The distinct S-box tables in a cipher's circuits.
+
+    Read off the built netlist rather than guessed at from names in the
+    source, so a cipher defined in the user's own file is treated the same
+    as a built-in one.
+    """
+    from dig2claasp import Netlist, sbox_table
+
+    tables, seen = {}, set()
     for part in spec["parts"]:
         js = os.path.join(out, f"{spec['name']}_{part}.json")
         if not os.path.exists(js):
             continue
-        from dig2claasp import Netlist, sbox_table
         for comp in Netlist(js).by_type("ROM"):
             table = sbox_table(comp)
-            if not table:
+            if not table or tuple(table) in seen:
                 continue
-            key = tuple(table)
-            if key not in {tuple(v) for v in tables.values()}:
-                label = comp["attrs"].get("Label") or "S"
-                name = f"{spec['name'].upper()}_{label.rstrip('0123456789')}"
-                while name in tables:
-                    name += "'"
-                tables[name] = table
+            seen.add(tuple(table))
+            label = comp["attrs"].get("Label") or "S"
+            name = f"{spec['name'].upper()}_{label.rstrip('0123456789')}"
+            while name in tables:
+                name += "'"
+            tables[name] = table
+    return tables
+
+
+def _max_ddt(table):
+    """The largest non-trivial entry of a table's difference table."""
+    n = len(table)
+    best = 0
+    for din in range(1, n):
+        counts = [0] * n
+        for x in range(n):
+            counts[table[x] ^ table[x ^ din]] += 1
+        best = max(best, max(counts))
+    return best or 1
+
+
+def cmd_sbox(args):
+    """DDT and LAT of a cipher's S-boxes -- the tables papers quote."""
+    from digtrail import sbox_tables
+    spec = _spec(args.cipher)
+    tables = _sboxes_of(spec, _outdir(spec, args))
 
     if not tables:
         sys.exit(f"no S-box found in {spec['name']}'s circuits. Run `build "
@@ -501,6 +548,115 @@ def cmd_sbox(args):
                          else json.dumps(r, indent=2, default=str))
             print(f"  wrote {target}")
     return 0
+
+
+VERIFIED = ".verified.json"
+
+
+def _reference_digest(spec):
+    """A digest of the reference implementation's source."""
+    import hashlib
+    import inspect
+    try:
+        src = inspect.getsource(spec["reference"])
+    except (OSError, TypeError):
+        return None
+    return hashlib.sha256(src.encode()).hexdigest()
+
+
+def _record_verified(spec, out, rounds, vectors):
+    """
+    Note that these netlists passed `verify`, and against what.
+
+    The digests are the point. A note that says "verified" and nothing else
+    would still be true after the circuit was redrawn; the digests make the
+    claim about *these* files, and the reference digest makes it about the
+    implementation they were checked against -- a circuit can be unchanged
+    while the reference it agreed with has been rewritten underneath it.
+    """
+    import datetime
+    from provenance import circuit_digests
+
+    record = {
+        "digests": {c["file"]: c["sha256"]
+                    for c in circuit_digests(out, spec["name"])
+                    if c["file"].endswith(".json")},
+        "rounds_checked": rounds,
+        "vectors": vectors,
+        "reference": _reference_digest(spec),
+        "timestamp": datetime.datetime.now(
+            datetime.timezone.utc).isoformat(timespec="seconds"),
+    }
+    with open(os.path.join(out, VERIFIED), "w") as fh:
+        json.dump(record, fh, indent=2)
+
+
+def _require_verified(spec, out, rounds, args):
+    """
+    Refuse to analyse a circuit that has not been checked, unless told to.
+
+    This is the whole argument of the project, made into a mechanism rather
+    than a convention. A CLAASP model built from a mistranslated circuit
+    still produces plausible differential trails, and nothing in them looks
+    wrong -- the only thing that would have caught it is the stage the user
+    skipped. Printing a warning does not help: a warning beside a plausible
+    number is a warning nobody reads.
+
+    `--unverified` remains, because analysing a circuit that has no
+    reference implementation yet is a legitimate thing to do while designing
+    one. It has to be asked for.
+    """
+    from provenance import circuit_digests
+
+    if getattr(args, "unverified", False):
+        print("  --unverified: this circuit has not been checked against "
+              "any reference.")
+        print("  Whatever comes out describes the circuit, not the cipher "
+              "it is meant to be.")
+        return
+
+    path = os.path.join(out, VERIFIED)
+    if not os.path.exists(path):
+        sys.exit(
+            f"  {spec['name']} has not passed `verify`.\n\n"
+            f"    python3 digcli.py verify {spec['name']}\n\n"
+            f"  A model built from a mistranslated circuit still produces "
+            f"plausible trails,\n"
+            f"  and nothing in them looks wrong. `verify` is what rules that "
+            f"out: it checks\n"
+            f"  the circuit against a reference implementation, and the "
+            f"reference against the\n"
+            f"  cipher's published test vectors.\n\n"
+            f"  Pass --unverified to continue anyway; the result then "
+            f"describes this circuit,\n"
+            f"  not the cipher it is meant to be.")
+
+    record = json.load(open(path))
+    now = {c["file"]: c["sha256"]
+           for c in circuit_digests(out, spec["name"])
+           if c["file"].endswith(".json")}
+    changed = [f for f, d in record["digests"].items() if now.get(f) != d]
+    if changed:
+        sys.exit(
+            f"  {spec['name']}'s circuits have changed since `verify` last "
+            f"passed:\n"
+            + "".join(f"    {f}\n" for f in changed)
+            + f"\n  Run `verify {spec['name']}` again.")
+
+    if record.get("reference") != _reference_digest(spec):
+        sys.exit(
+            f"  {spec['name']}'s reference implementation has changed since "
+            f"`verify` last passed.\n"
+            f"  The circuit is untouched, but what it was checked against is "
+            f"not.\n\n"
+            f"    python3 digcli.py verify {spec['name']}")
+
+    print(f"  verified: {record['vectors']} published vectors, "
+          f"circuit vs reference to round {record['rounds_checked']}")
+    if rounds > record["rounds_checked"]:
+        print(f"  note: analysing {rounds} rounds, but only "
+              f"{record['rounds_checked']} were checked. Round constants "
+              f"beyond that point are untested.")
 
 
 def _load_cipher(spec, out, rounds, key=0):
@@ -526,6 +682,11 @@ def cmd_cluster(args):
 
     spec = _spec(args.cipher)
     rounds = args.rounds or 3
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     model = SatXorDifferentialModel(cipher)
     fixed = [
@@ -559,6 +720,11 @@ def cmd_impossible(args):
     from digattack import impossible_differentials, zero_correlation
     spec = _spec(args.cipher)
     rounds = args.rounds or 3
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     fn = zero_correlation if args.linear else impossible_differentials
     kind = "zero-correlation" if args.linear else "impossible differential"
@@ -584,6 +750,11 @@ def cmd_bound(args):
     from digattack import differential_bound
     spec = _spec(args.cipher)
     rounds = args.rounds or 3
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     print(f"  {rounds} rounds, satisfiability at each weight")
     weights = []
@@ -713,6 +884,11 @@ def cmd_relatedkey(args):
         return 0
 
     rounds = args.rounds or 3
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     print(f"  {spec['name']}, {rounds} rounds")
     r = related_key(cipher, key_bits=spec["key_bits"],
@@ -746,6 +922,11 @@ def cmd_random(args):
     from digstat import avalanche, diffusion, nist
     spec = _spec(args.cipher)
     rounds = args.rounds or spec["rounds"]
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
 
     print(f"  {spec['name']}, {rounds} rounds")
@@ -823,6 +1004,7 @@ def cmd_env(args):
 #: commit, and the NIST battery is far too slow for that.
 SUITES = [
     ("reference implementations vs published vectors", None, "offline", []),
+    ("input validation", "test_validation.py", "quick", []),
     ("cross-validation against Digital", "test_all.py", "quick", []),
     ("PRESENT against CLAASP's own model", "test_present_reference.py",
      "normal", []),
@@ -909,8 +1091,12 @@ def cmd_selftest(args):
         if not os.path.exists(path):
             print(f"  SKIP  {label} ({script} not found)")
             continue
-        cmd = [sys.executable, path, "--digital-jar", jar,
-               "--bridge-jar", bridge] + extra
+        # test_validation needs no toolchain, so do not hand it jars it
+        # would only reject.
+        cmd = [sys.executable, path]
+        if script != "test_validation.py":
+            cmd += ["--digital-jar", jar, "--bridge-jar", bridge]
+        cmd += extra
         t = time.time()
         r = subprocess.run(cmd, capture_output=True, text=True)
         dt = time.time() - t
@@ -979,6 +1165,11 @@ def cmd_replicate(args):
 
     states = [value(r) for r in rows]
     rounds = args.rounds or (len(states) - 1)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+    _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     block, key = spec["block_bits"], spec["key_bits"]
 
@@ -1102,6 +1293,8 @@ def main():
     p.add_argument("--export", action="append", metavar="FILE",
                    help="write the trail as .svg .pdf .png .jpg .tex .tikz "
                         ".csv .json .md .txt; repeat for several")
+    p.add_argument("--unverified", action="store_true",
+                   help="proceed on a circuit that has not passed verify")
 
     p = sub.add_parser("sbox", help="DDT and LAT of the cipher's S-boxes")
     p.add_argument("cipher")
@@ -1116,6 +1309,8 @@ def main():
                    help="also count characteristics this much heavier")
     p.add_argument("--solver", default="KISSAT_EXT")
     p.add_argument("--json")
+    p.add_argument("--unverified", action="store_true",
+                   help="analyse a circuit that has not passed verify")
 
     p = sub.add_parser("impossible",
                        help="impossible differentials, or --linear for "
@@ -1127,6 +1322,8 @@ def main():
     p.add_argument("--max-pairs", type=int)
     p.add_argument("--solver", default="KISSAT_EXT")
     p.add_argument("--json")
+    p.add_argument("--unverified", action="store_true",
+                   help="proceed on a circuit that has not passed verify")
 
     p = sub.add_parser("bound",
                        help="is there a characteristic of weight w? "
@@ -1138,6 +1335,8 @@ def main():
     p.add_argument("--weights", nargs="+", default=["8", "12", "16", "20"],
                    help="weights to test; 8 12 16 or 8,12,16 both work")
     p.add_argument("--solver", default="KISSAT_EXT")
+    p.add_argument("--unverified", action="store_true",
+                   help="proceed on a circuit that has not passed verify")
 
     p = sub.add_parser("cost", help="what the drawn circuit costs")
     p.add_argument("cipher")
@@ -1208,6 +1407,8 @@ def main():
                         ".tex .tikz .csv .json .md .txt; repeat for several")
     p.add_argument("--solver", default="KISSAT_EXT")
     p.add_argument("--json")
+    p.add_argument("--unverified", action="store_true",
+                   help="proceed on a circuit that has not passed verify")
 
     p = sub.add_parser("bench",
                        help="published figures, grouped by environment")

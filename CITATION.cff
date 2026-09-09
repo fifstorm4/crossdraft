@@ -4,13 +4,9 @@ title: >-
 message: >-
   If you use this software in your research, please cite it as below.
 type: software
-# TODO before a public release: replace with real details.
-#   - family-names: ...
-#     given-names: ...
-#     orcid: "https://orcid.org/0000-0000-0000-0000"
-#     affiliation: ...
-# A DOI is assigned automatically once the repository is linked to Zenodo
-# and a release is tagged; add it here as `doi:` when it exists.
+# Deliberately collective. Correspondence goes through the repository's
+# issue tracker. A DOI is assigned automatically once the repository is
+# linked to Zenodo and a release is tagged; add it here as `doi:` then.
 authors:
   - name: The CrossDraft Authors
 repository-code: "https://github.com/fifstorm4/crossdraft"
