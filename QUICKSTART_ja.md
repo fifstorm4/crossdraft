@@ -210,6 +210,28 @@ MYCIPHER = {
 
 ## 手順7 — 自分の暗号を解析する
 
+**解析系のコマンドは `verify` を通っていない回路を受け付けません。**
+
+```
+  mycipher has not passed `verify`.
+
+    python3 digcli.py verify mycipher
+```
+
+理由は、誤って翻訳された回路からも**もっともらしい差分特性が出てくる**からです。
+出てきた数値のどこにも異常はなく、それを排除できる唯一の機会が `verify` です。
+
+覚えておくことは3つ。
+
+| | |
+|---|---|
+| 回路や `mycipher.py` を変更したら | **`verify` をやり直す** |
+| 参照実装をまだ書いていない設計を見たいとき | **`--unverified`** を付ける |
+| 変更していないのに拒否されたら | 何が変わったかをメッセージが名指しします |
+
+`--unverified` を付けた場合、出てくる結果は**その回路の性質**であって、
+意図した暗号の性質ではありません。ツールもそう言います。
+
 ```powershell
 .\run.ps1 build   mycipher
 .\run.ps1 verify  mycipher
@@ -285,6 +307,8 @@ MYCIPHER = {
 | `error during connect` | Docker Desktop がまだ起動していない |
 | `mycipher` が一覧に出ない | ファイル名か置き場所。`C:\crossdraft\mycipher.py` |
 | `no state variable found` | `In "x"` と `Out "x'"` の対がない |
+| `has not passed verify` | `verify` を先に実行する。手順7を参照 |
+| `definition has changed since verify` | `mycipher.py` を変更した。`verify` をやり直す |
 | `circuit vs reference: 0/N` | 回路と参照実装が食い違う。**回路を疑う** |
 | `published vectors: 0/N` | **参照実装を疑う**。回路ではない |
 | `port is already allocated` | 前回の GUI が残っている。`docker ps` で確認して `docker stop` |

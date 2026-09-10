@@ -191,6 +191,11 @@ REGISTRY = {c["name"]: c for c in (PRESENT, LLBC, ..., YOURS)}
     an Out "X'" (or 'X_next'). inputs=['rk', 'state'] outputs=['out']
 ```
 
+**`verify` を通らない回路は解析できません。** `analyse` も `cluster` も
+`replicate` も拒否します。設計中で参照実装がまだ無い場合は `--unverified`
+を付けてください。その場合の結果は回路の性質であって暗号の性質ではない、
+とツールが明示します。
+
 `verify` が3層を照合します。
 
 ```

@@ -75,8 +75,10 @@ def main():
           "" if rc == 0 else _tail(out), dt)
 
     rc, out, dt = run("verify", "llbc", "--rounds", "20", "--trials", "4")
-    check("LLBC circuit matches its reference at 20 rounds",
-          rc == 0 and "20 rounds: 4/4" in out,
+    # verify samples several round counts now, so the total is trials times
+    # the number sampled. Match the outcome, not one round number.
+    check("LLBC circuit matches its reference",
+          rc == 0 and "16/16 random pairs" in out,
           "" if rc == 0 else _tail(out), dt)
 
     # Speck's published test vector, and its published optimal trail weights.

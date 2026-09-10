@@ -128,7 +128,8 @@ def _gate_checks():
         # A record naming a netlist that is not there fails on the digest,
         # which is the same path a modified circuit takes.
         json.dump({"digests": {"present_round.json": "0" * 64},
-                   "rounds_checked": 31, "vectors": "4/4",
+                   "rounds_checked": [1, 2, 5, 31], "vectors": "4/4",
+                   "trials": 8, "seed": 0,
                    "definition": digcli._spec_digest(spec)},
                   open(os.path.join(out, digcli.VERIFIED), "w"))
         try:
@@ -139,7 +140,8 @@ def _gate_checks():
 
         # A record with no digests at all: only the definition is checked,
         # so a stale definition must still be caught.
-        json.dump({"digests": {}, "rounds_checked": 31, "vectors": "4/4",
+        json.dump({"digests": {}, "rounds_checked": [1, 2, 5, 31],
+                   "vectors": "4/4", "trials": 8, "seed": 0,
                    "definition": "0" * 64},
                   open(os.path.join(out, digcli.VERIFIED), "w"))
         try:
@@ -149,8 +151,8 @@ def _gate_checks():
             check("a changed definition is refused", True)
 
         # A record from before the definition digest existed.
-        json.dump({"digests": {}, "rounds_checked": 31, "vectors": "4/4",
-                   "reference": "0" * 64},
+        json.dump({"digests": {}, "rounds_checked": [1, 2, 5, 31],
+                   "vectors": "4/4", "reference": "0" * 64},
                   open(os.path.join(out, digcli.VERIFIED), "w"))
         try:
             digcli._require_verified(spec, out, 3, args)
@@ -159,7 +161,8 @@ def _gate_checks():
             check("a record in the old format is refused", True)
 
         # A sound record passes, and says so.
-        json.dump({"digests": {}, "rounds_checked": 20, "vectors": "4/4",
+        json.dump({"digests": {}, "rounds_checked": [1, 2, 5, 20],
+                   "vectors": "4/4", "trials": 8, "seed": 0,
                    "definition": digcli._spec_digest(spec)},
                   open(os.path.join(out, digcli.VERIFIED), "w"))
         try:
@@ -182,6 +185,24 @@ def _gate_checks():
 
     check("the digest is stable across calls",
           digcli._spec_digest(spec) == digcli._spec_digest(spec))
+
+    # A record from before rounds_checked became a list must still be read,
+    # since it is only the definition digest that forces a re-verify.
+    import io
+    import contextlib
+    with tempfile.TemporaryDirectory() as out:
+        json.dump({"digests": {}, "rounds_checked": 31, "vectors": "4/4",
+                   "trials": 8, "seed": 0,
+                   "definition": digcli._spec_digest(spec)},
+                  open(os.path.join(out, digcli.VERIFIED), "w"))
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                digcli._require_verified(
+                    spec, out, 3, types.SimpleNamespace(unverified=False))
+            check("a scalar rounds_checked is still readable", True)
+        except SystemExit:
+            check("a scalar rounds_checked is still readable", False)
 
 
 if __name__ == "__main__":

@@ -347,20 +347,31 @@ def cmd_verify(args):
             acc ^= extras[n][spec["final_key"]]
         return acc
 
+    # Several round counts, not one. The test suite already samples 1, 2, 5
+    # and the full count, and the record is more honest for saying which
+    # were checked than for naming a single number -- a warning that fires
+    # only above `rounds_checked` says nothing about the rounds below it.
+    #
+    # A short count also catches a different class of mistake: a round
+    # constant applied to the wrong round shows up at two rounds and cancels
+    # itself by twenty.
+    checked = sorted({1, 2, min(5, rounds), rounds})
     random.seed(args.seed)
     bad = 0
-    for _ in range(args.trials):
-        pt = random.getrandbits(spec["block_bits"])
-        key = random.getrandbits(spec["key_bits"])
-        got, want = run(pt, key, rounds), ref(pt, key, rounds)
-        if got != want:
-            bad += 1
-            if bad == 1:
-                print(f"  circuit MISMATCH at {rounds} rounds\n"
-                      f"    got  {got:0{spec['block_bits']//4}x}\n"
-                      f"    want {want:0{spec['block_bits']//4}x}")
-    print(f"  circuit vs reference at {rounds} rounds: "
-          f"{args.trials - bad}/{args.trials}")
+    for n in checked:
+        for _ in range(args.trials):
+            pt = random.getrandbits(spec["block_bits"])
+            key = random.getrandbits(spec["key_bits"])
+            if run(pt, key, n) != ref(pt, key, n):
+                bad += 1
+                if bad == 1:
+                    print(f"  circuit MISMATCH at {n} rounds")
+                break
+
+    total = len(checked) * args.trials
+    print(f"  circuit vs reference at rounds "
+          f"{'/'.join(str(n) for n in checked)}: "
+          f"{total - bad}/{total} random pairs (seed {args.seed})")
 
     if bad or vector_failures:
         # Remove the previous record rather than leaving it. A stale record
@@ -374,7 +385,8 @@ def cmd_verify(args):
         return 1
 
     # Record what passed, so `analyse` can refuse a circuit that has not.
-    _record_verified(spec, out, rounds, vectors_result)
+    _record_verified(spec, out, checked, vectors_result,
+                     args.trials, args.seed)
     return 0
 
 
@@ -616,7 +628,7 @@ def _spec_digest(spec):
     return h.hexdigest()
 
 
-def _record_verified(spec, out, rounds, vectors):
+def _record_verified(spec, out, checked, vectors, trials, seed):
     """
     Note that these netlists passed `verify`, and against what.
 
@@ -633,8 +645,14 @@ def _record_verified(spec, out, rounds, vectors):
         "digests": {c["file"]: c["sha256"]
                     for c in circuit_digests(out, spec["name"])
                     if c["file"].endswith(".json")},
-        "rounds_checked": rounds,
+        "rounds_checked": list(checked),
         "vectors": vectors,
+        # How hard it was checked is part of what the record claims. A note
+        # that says "verified" does not distinguish one random pair from a
+        # thousand, and the strength of the check is not a detail of how it
+        # was run -- it is part of the claim.
+        "trials": trials,
+        "seed": seed,
         "definition": _spec_digest(spec),
         "timestamp": datetime.datetime.now(
             datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -715,12 +733,16 @@ def _require_verified(spec, out, rounds, args):
             f"checked.\n\n"
             f"    python3 digcli.py verify {spec['name']}")
 
-    print(f"  verified: {record['vectors']} published vectors, "
-          f"circuit vs reference to round {record['rounds_checked']}")
-    if rounds > record["rounds_checked"]:
-        print(f"  note: analysing {rounds} rounds, but only "
-              f"{record['rounds_checked']} were checked. Round constants "
-              f"beyond that point are untested.")
+    rc = record["rounds_checked"]
+    rounds_list = rc if isinstance(rc, list) else [rc]
+    print(f"  verified: {record['vectors']} published vectors, circuit vs "
+          f"reference at rounds {'/'.join(str(n) for n in rounds_list)} "
+          f"({record.get('trials', '?')} random pairs each, seed "
+          f"{record.get('seed', '?')})")
+    if rounds > max(rounds_list):
+        print(f"  note: analysing {rounds} rounds, but the most checked was "
+              f"{max(rounds_list)}. Round constants beyond that point are "
+              f"untested.")
 
 
 def _load_cipher(spec, out, rounds, key=0):
@@ -1260,7 +1282,25 @@ def cmd_replicate(args):
         print("  that disagrees.")
         return 1
 
-    print(f"  REPLICATED: weight {got} (probability 2^-{got})")
+    # Say which of the two questions was answered. Without --pin-all the
+    # solver was free to reach the published output difference by a route of
+    # its own, so a match means the endpoints are joinable at that weight --
+    # not that the published path is realisable. The flag's own help text
+    # says this; the result line did not.
+    if args.pin_all:
+        print(f"  REPLICATED: the published path holds, every round pinned, "
+              f"at weight {got}")
+    else:
+        print(f"  REPLICATED: a characteristic of weight {got} joins these "
+              f"two differences.")
+        print(f"    Endpoints only -- the published intermediate rounds were "
+              f"not pinned, so this")
+        print(f"    does not yet say the published path is the one found. "
+              f"Re-run with --pin-all.")
+    print(f"    Characteristic probability 2^-{got} under the Markov "
+          f"assumption; the differential")
+    print(f"    joining these differences may be stronger. `cluster "
+          f"{spec['name']} --rounds {rounds}` sums it.")
 
     if args.show or args.export:
         from digtrail import Trail

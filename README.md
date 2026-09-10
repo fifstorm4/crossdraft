@@ -122,6 +122,11 @@ this gate exists to catch, so it has to be watched too.
 A failed `verify` deletes the record rather than leaving the last successful
 one in place.
 
+`verify` samples several round counts rather than one — 1, 2, 5 and the full
+count — and records how many random pairs it used and with which seed. A
+record that says only "verified" does not distinguish one pair from a
+thousand, and the strength of a check is part of what it claims.
+
 `--unverified` proceeds anyway, and says what that costs. Analysing a design
 that has no reference implementation yet is legitimate; it just has to be
 asked for.
@@ -620,7 +625,7 @@ the search still finishes in seconds.
 | PRESENT | circuit vs reference, 1/2/5/31 rounds | all agree |
 | PRESENT | key avalanche, 31 rounds | 32.70 of 64 bits, ideal 32 |
 | PRESENT | differential, 3 and 4 rounds | weight 8 and 12 — 4 and 6 active S-boxes, the known bounds |
-| LLBC | circuit vs reference, 1…20 rounds | all agree |
+| LLBC | circuit vs reference, 1/2/5/20 rounds | all agree |
 | LLBC | differential, 2 and 3 rounds | weight 4 and 8, matching a hand-written CLAASP model |
 
 The optional features have their own suites, so the core one stays fast:
