@@ -78,12 +78,110 @@ def main():
           _under(here, "/nonexistent", os.getcwd())
           == os.path.realpath(here))
 
+    _gate_checks()
+
     print()
     if fails:
         print(f"{len(fails)} failure(s): {fails}")
         return 1
     print("input validation holds")
     return 0
+
+
+def _gate_checks():
+    """
+    The verify gate, without a solver anywhere near it.
+
+    Worth testing offline for the same reason the gate sits before the
+    CLAASP import: it has to work on a machine where the analysis stack is
+    absent, or the people who most need to see its message never will.
+    """
+    import json
+    import shutil
+    import tempfile
+    import types
+
+    import digcli
+    from ciphers import REGISTRY
+
+    spec = REGISTRY["present"]
+
+    with tempfile.TemporaryDirectory() as out:
+        args = types.SimpleNamespace(unverified=False)
+
+        # No record at all.
+        try:
+            digcli._require_verified(spec, out, 3, args)
+            check("an unverified circuit is refused", False)
+        except SystemExit:
+            check("an unverified circuit is refused", True)
+
+        # ...unless asked for.
+        args.unverified = True
+        try:
+            digcli._require_verified(spec, out, 3, args)
+            check("--unverified proceeds", True)
+        except SystemExit:
+            check("--unverified proceeds", False)
+        args.unverified = False
+
+        # A record naming a netlist that is not there fails on the digest,
+        # which is the same path a modified circuit takes.
+        json.dump({"digests": {"present_round.json": "0" * 64},
+                   "rounds_checked": 31, "vectors": "4/4",
+                   "definition": digcli._spec_digest(spec)},
+                  open(os.path.join(out, digcli.VERIFIED), "w"))
+        try:
+            digcli._require_verified(spec, out, 3, args)
+            check("a changed circuit is refused", False)
+        except SystemExit:
+            check("a changed circuit is refused", True)
+
+        # A record with no digests at all: only the definition is checked,
+        # so a stale definition must still be caught.
+        json.dump({"digests": {}, "rounds_checked": 31, "vectors": "4/4",
+                   "definition": "0" * 64},
+                  open(os.path.join(out, digcli.VERIFIED), "w"))
+        try:
+            digcli._require_verified(spec, out, 3, args)
+            check("a changed definition is refused", False)
+        except SystemExit:
+            check("a changed definition is refused", True)
+
+        # A record from before the definition digest existed.
+        json.dump({"digests": {}, "rounds_checked": 31, "vectors": "4/4",
+                   "reference": "0" * 64},
+                  open(os.path.join(out, digcli.VERIFIED), "w"))
+        try:
+            digcli._require_verified(spec, out, 3, args)
+            check("a record in the old format is refused", False)
+        except SystemExit:
+            check("a record in the old format is refused", True)
+
+        # A sound record passes, and says so.
+        json.dump({"digests": {}, "rounds_checked": 20, "vectors": "4/4",
+                   "definition": digcli._spec_digest(spec)},
+                  open(os.path.join(out, digcli.VERIFIED), "w"))
+        try:
+            digcli._require_verified(spec, out, 3, args)
+            check("a sound record passes", True)
+        except SystemExit:
+            check("a sound record passes", False)
+
+    # The digest must move when anything reaching the model does.
+    import copy
+    other = copy.copy(spec)
+    other["params"] = lambda i, key: {"rk": 0}
+    check("changing the round constants changes the digest",
+          digcli._spec_digest(other) != digcli._spec_digest(spec))
+
+    other = copy.copy(spec)
+    other["block_bits"] = 128
+    check("changing the block size changes the digest",
+          digcli._spec_digest(other) != digcli._spec_digest(spec))
+
+    check("the digest is stable across calls",
+          digcli._spec_digest(spec) == digcli._spec_digest(spec))
 
 
 if __name__ == "__main__":

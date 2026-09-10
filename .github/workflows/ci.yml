@@ -64,6 +64,13 @@ jobs:
 
       # Digital's own simulator is the oracle, so a pass says the two agree
       # on this runner rather than on the author's machine.
+      # No Java, no CLAASP, no container: these are pure functions, and the
+      # fixes they guard are the kind that get quietly reverted when a
+      # reverse proxy or a port forward makes them inconvenient.
+      - name: Validation helpers and the verify gate
+        run: python tests/test_validation.py
+        shell: bash
+
       - name: Cross-validation against Digital
         run: python tests/test_all.py --digital-jar "$DIGITAL_JAR" --bridge-jar "$BRIDGE_JAR"
         shell: bash

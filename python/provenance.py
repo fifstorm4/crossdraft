@@ -183,7 +183,7 @@ def verification(outdir):
         "verified": True,
         "vectors": record.get("vectors"),
         "rounds_checked": record.get("rounds_checked"),
-        "reference_sha256": (record.get("reference") or "")[:16],
+        "definition_sha256": (record.get("definition") or "")[:16],
         "when": record.get("timestamp"),
     }
 
@@ -235,7 +235,7 @@ def text(rep):
                   f"  published vectors   {v.get('vectors')}",
                   f"  circuit vs reference to round "
                   f"{v.get('rounds_checked')}",
-                  f"  reference sha256    {v.get('reference_sha256')}…",
+                  f"  definition sha256   {v.get('definition_sha256')}…",
                   f"  checked at          {v.get('when')}"]
     elif rep["circuits"]:
         lines += ["", "verification",

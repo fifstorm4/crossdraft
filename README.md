@@ -112,11 +112,15 @@ circuit that has not passed `verify`:
 
 This is the project's whole argument turned into a mechanism instead of a
 convention. `verify` writes `build/<cipher>/.verified.json` holding a SHA-256
-of every netlist, a digest of the reference implementation's source, and the
-round count checked. The analysis commands compare against it, so redrawing
-the circuit invalidates the record — and so does rewriting the reference the
-circuit was checked against, which leaves the circuit untouched while changing
-what agreeing with it means.
+of every netlist, a digest of the cipher's whole definition, and the round
+count checked. The definition digest covers the reference implementation,
+`params`, `key_params` and the sizes — everything that reaches the model.
+Editing a round constant changes the cipher being analysed while leaving both
+the circuit and the reference untouched, and that is precisely the failure
+this gate exists to catch, so it has to be watched too.
+
+A failed `verify` deletes the record rather than leaving the last successful
+one in place.
 
 `--unverified` proceeds anyway, and says what that costs. Analysing a design
 that has no reference implementation yet is legitimate; it just has to be

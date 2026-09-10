@@ -363,6 +363,14 @@ def cmd_verify(args):
           f"{args.trials - bad}/{args.trials}")
 
     if bad or vector_failures:
+        # Remove the previous record rather than leaving it. A stale record
+        # points at the last state that passed, and the gate has no way to
+        # know a later check failed -- so a circuit whose reference was just
+        # broken would still be analysed as though it were sound.
+        stale = os.path.join(out, VERIFIED)
+        if os.path.exists(stale):
+            os.remove(stale)
+            print("  removed the previous verification record.")
         return 1
 
     # Record what passed, so `analyse` can refuse a circuit that has not.
@@ -380,12 +388,13 @@ def cmd_analyse(args):
     out = _outdir(spec, args)
     rounds = args.rounds or 3
 
+    _require_verified(spec, out, rounds, args)
+
     # Via the shared loader, not by assembling the arguments here. A key
     # schedule is wired up by several optional settings -- key_map,
     # key_extra, final_key -- and a second copy of that assembly is a second
     # chance to name one the cipher does not have. PRESENT uses key_extra
     # and no key_map, and this is exactly where that crashed.
-    _require_verified(spec, out, rounds, args)
     cipher = _load_cipher(spec, out, rounds)
     print(f"  CLAASP cipher: {rounds} rounds, "
           f"{len(cipher.get_all_components_ids())} components")
@@ -450,7 +459,7 @@ def cmd_analyse(args):
     # SKINNY and wrong elsewhere: GIFT's best transition is 6/16, and Speck
     # and Simon have no S-box at all -- for those the line is not merely
     # inaccurate, it counts something the cipher does not contain.
-    tables = _sboxes_of(spec, _outdir(spec, args))
+    tables = _sboxes_of(spec, _outdir(spec, args), parts=["round"])
     if tables:
         per = min(-math.log2(_max_ddt(t) / len(t)) for t in tables.values())
         print(f"  active S-boxes at most: {int(w // per)}  "
@@ -482,18 +491,27 @@ def cmd_analyse(args):
     return 0
 
 
-def _sboxes_of(spec, out):
+def _sboxes_of(spec, out, parts=None):
     """
     The distinct S-box tables in a cipher's circuits.
 
     Read off the built netlist rather than guessed at from names in the
     source, so a cipher defined in the user's own file is treated the same
     as a built-in one.
+
+    `parts` restricts which circuits are looked at. Bounding the active
+    S-box count wants the data path only: in a single-key differential the
+    key difference is zero, so the key schedule's S-boxes never activate,
+    and counting a cheaper one from there would inflate the bound. Showing
+    the tables wants every part, because the point is to show what is in the
+    circuit.
     """
     from dig2claasp import Netlist, sbox_table
 
     tables, seen = {}, set()
-    for part in spec["parts"]:
+    for part in (parts if parts is not None else spec["parts"]):
+        if part not in spec["parts"]:
+            continue
         js = os.path.join(out, f"{spec['name']}_{part}.json")
         if not os.path.exists(js):
             continue
@@ -553,15 +571,49 @@ def cmd_sbox(args):
 VERIFIED = ".verified.json"
 
 
-def _reference_digest(spec):
-    """A digest of the reference implementation's source."""
+#: Everything in a cipher's definition that reaches the CLAASP model.
+#: Callables are hashed by source; the rest by value.
+_SPEC_CALLABLES = ("reference", "params", "key_params")
+_SPEC_SCALARS = ("block_bits", "key_bits", "rounds", "bit_order", "state",
+                 "key_state", "key_map", "key_extra", "final_key")
+
+
+def _spec_digest(spec):
+    """
+    A digest of everything in the definition that reaches the model.
+
+    Hashing only the reference implementation stops halfway. `params`
+    supplies the round constants and `key_params` the key schedule's, and
+    both go straight into the model -- so editing a round constant changes
+    the cipher being analysed while leaving the circuit and the reference
+    untouched. The gate would then report "verified" for a cipher it has
+    never seen.
+
+    That is the failure this gate exists to prevent, arriving through the
+    one door it was not watching.
+    """
     import hashlib
     import inspect
-    try:
-        src = inspect.getsource(spec["reference"])
-    except (OSError, TypeError):
-        return None
-    return hashlib.sha256(src.encode()).hexdigest()
+    import json
+
+    h = hashlib.sha256()
+    for key in _SPEC_CALLABLES:
+        fn = spec.get(key)
+        if fn is None:
+            h.update(b"\0")
+            continue
+        try:
+            h.update(inspect.getsource(fn).encode())
+        except (OSError, TypeError):
+            # A callable with no retrievable source -- a partial, say. Fall
+            # back to its repr, which at least changes when it is rebound.
+            h.update(repr(fn).encode())
+    h.update(json.dumps(
+        {k: spec.get(k) for k in _SPEC_SCALARS},
+        sort_keys=True, default=str).encode())
+    h.update(json.dumps(sorted(spec.get("parts", {})),
+                        sort_keys=True).encode())
+    return h.hexdigest()
 
 
 def _record_verified(spec, out, rounds, vectors):
@@ -583,7 +635,7 @@ def _record_verified(spec, out, rounds, vectors):
                     if c["file"].endswith(".json")},
         "rounds_checked": rounds,
         "vectors": vectors,
-        "reference": _reference_digest(spec),
+        "definition": _spec_digest(spec),
         "timestamp": datetime.datetime.now(
             datetime.timezone.utc).isoformat(timespec="seconds"),
     }
@@ -643,12 +695,24 @@ def _require_verified(spec, out, rounds, args):
             + "".join(f"    {f}\n" for f in changed)
             + f"\n  Run `verify {spec['name']}` again.")
 
-    if record.get("reference") != _reference_digest(spec):
+    # A record written before this field existed cannot be checked, and
+    # trusting it would defeat the point; ask for a re-verify instead.
+    if "definition" not in record:
         sys.exit(
-            f"  {spec['name']}'s reference implementation has changed since "
-            f"`verify` last passed.\n"
-            f"  The circuit is untouched, but what it was checked against is "
-            f"not.\n\n"
+            f"  {spec['name']}'s verification record predates the current "
+            f"format.\n\n"
+            f"    python3 digcli.py verify {spec['name']}")
+
+    if record["definition"] != _spec_digest(spec):
+        sys.exit(
+            f"  {spec['name']}'s definition has changed since `verify` last "
+            f"passed.\n"
+            f"  The circuits are untouched, but the reference "
+            f"implementation, the round\n"
+            f"  constants, or the key schedule's parameters are not -- and "
+            f"all three reach\n"
+            f"  the model. What would be analysed is no longer what was "
+            f"checked.\n\n"
             f"    python3 digcli.py verify {spec['name']}")
 
     print(f"  verified: {record['vectors']} published vectors, "
@@ -682,10 +746,6 @@ def cmd_cluster(args):
 
     spec = _spec(args.cipher)
     rounds = args.rounds or 3
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
     _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     model = SatXorDifferentialModel(cipher)
@@ -721,10 +781,6 @@ def cmd_impossible(args):
     spec = _spec(args.cipher)
     rounds = args.rounds or 3
     _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     fn = zero_correlation if args.linear else impossible_differentials
     kind = "zero-correlation" if args.linear else "impossible differential"
@@ -750,10 +806,6 @@ def cmd_bound(args):
     from digattack import differential_bound
     spec = _spec(args.cipher)
     rounds = args.rounds or 3
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
     _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     print(f"  {rounds} rounds, satisfiability at each weight")
@@ -850,6 +902,14 @@ def cmd_relatedkey(args):
     from digstat import related_key, key_schedule_report
     spec = _spec(args.cipher)
 
+    # Before the sweep, not after: the sweep returns early, and what it
+    # prints -- a table of single-key against related-key weights, round by
+    # round -- is exactly the shape of thing that ends up in a paper. The
+    # heaviest output was the one path the gate did not cover.
+    rounds = (int(args.sweep.split(",")[1]) if args.sweep
+              else (args.rounds or 3))
+    _require_verified(spec, _outdir(spec, args), rounds, args)
+
     if args.sweep:
         lo, hi = (int(x) for x in args.sweep.split(","))
         print(f"  {spec['name']}, rounds {lo} to {hi}")
@@ -883,12 +943,6 @@ def cmd_relatedkey(args):
             print(f"  wrote {args.json}")
         return 0
 
-    rounds = args.rounds or 3
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     print(f"  {spec['name']}, {rounds} rounds")
     r = related_key(cipher, key_bits=spec["key_bits"],
@@ -922,10 +976,6 @@ def cmd_random(args):
     from digstat import avalanche, diffusion, nist
     spec = _spec(args.cipher)
     rounds = args.rounds or spec["rounds"]
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
     _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
 
@@ -1166,10 +1216,6 @@ def cmd_replicate(args):
     states = [value(r) for r in rows]
     rounds = args.rounds or (len(states) - 1)
     _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
-    _require_verified(spec, _outdir(spec, args), rounds, args)
     cipher = _load_cipher(spec, _outdir(spec, args), rounds)
     block, key = spec["block_bits"], spec["key_bits"]
 
@@ -1356,6 +1402,8 @@ def main():
                    help="pairs used for the key-linearity check")
     p.add_argument("--solver", default="KISSAT_EXT")
     p.add_argument("--json")
+    p.add_argument("--unverified", action="store_true",
+                   help="proceed on a circuit that has not passed verify")
 
     p = sub.add_parser("random",
                        help="avalanche and diffusion; --nist adds SP 800-22")
@@ -1371,6 +1419,8 @@ def main():
                    help="bits per sequence; NIST recommends >= 10^6")
     p.add_argument("--sequences", type=int, default=32,
                    help="sequences; NIST recommends >= 55")
+    p.add_argument("--unverified", action="store_true",
+                   help="proceed on a circuit that has not passed verify")
 
     p = sub.add_parser("env",
                        help="versions and circuit digests, for a paper's "
